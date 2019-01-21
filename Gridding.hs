@@ -75,7 +75,7 @@ frac_coord n qpx p =
 frac_coords :: Exp (Int, Int)                           -- (Heigt, width) of the grid
             -> Exp Int                                  -- Oversampling factor
             -> Acc (Vector (Float, Float, Float))       -- The uvw baselines, but between -.5 and .5
-            -> Acc (Vector (Int, Int, Int, Int))        -- TODO: Maybe only return xf and yf
+            -> Acc (Vector (Int, Int, Int, Int))
 -- NOTE we should give it in height, width order.
 frac_coords (unlift -> (h, w) ) qpx p =
     let (u, v, _) = unzip3 p
@@ -92,21 +92,24 @@ convgrid gcf a p v =
     let Z :. qpx :. _ :. gh :. gw = (arrayShape gcf) :: Z :. Int :. Int :. Int :. Int
         Z :. height :. width = unlift (shape a) :: Z :. Exp Int :. Exp Int
         coords = frac_coords (lift (height, width)) (constant qpx) p
-        replicatedv = replicate (constant (Z :. All :. (gh::Int) :. (gw::Int))) $ v
+        gpugcf = use gcf
         halfgh = constant $ gh `div` 2
         halfgw = constant $ gw `div` 2
-        gpugcf = use gcf
-        getComplex :: Int -> Int -> Exp (Int, Int, Int, Int) -> Exp (Complex Float)
-        getComplex i j (unlift -> (_, xf, _, yf)::(Exp Int,Exp Int,Exp Int,Exp Int)) =
-            gpugcf ! lift (Z :. yf :. xf :. constant i :. constant j)
-        fullrepli :: Int -> Int -> Acc (Array DIM3 (Complex Float)) -> Acc (Array DIM3 (Complex Float))
+
+        getComplex :: Int -> Int -> Exp (Int, Int, Int, Int) -> Exp (Int, Int, Complex Float)
+        getComplex i j (unlift -> (x, xf, y, yf)::(Exp Int,Exp Int,Exp Int,Exp Int)) =
+            lift ( x
+                 , y
+                 , gpugcf ! lift (Z :. yf :. xf :. constant i :. constant j) )
+        fullrepli :: Int -> Int -> Acc (Matrix (Complex Float)) -> Acc (Matrix (Complex Float))
         fullrepli i j origin = 
-            let sources = map (getComplex i j) coords
-                indexer (unlift -> Z:. id ::Z:.Exp Int) = lift (Z :. id :. constant i :. constant j)
-            in permute (*) origin indexer sources
+            let temp = map (getComplex i j) coords
+                (x, y, source) = unzip3 temp
+                indexer id = lift (Z :. y ! id - halfgh + constant i :. x ! id - halfgw + constant j)
+                newV = zipWith (*) source v
+            in permute (+) origin indexer newV
         
-        sparseresult = myfor 2 (\i -> myfor 2 (fullrepli i)) replicatedv
-    in undefined -- myfor 2 (\i -> myfor 2 (fullrepli i)) replicatedv
+    in myfor gh (\i -> myfor gw (fullrepli i)) a
 
 myfor :: Int -> (Int -> a -> a) -> a -> a
 myfor n f x | n P.== 0  = x
