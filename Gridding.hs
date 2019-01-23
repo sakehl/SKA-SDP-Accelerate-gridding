@@ -14,8 +14,8 @@ import Data.Array.Accelerate.Data.Complex                 as A
 import Data.Array.Accelerate.LLVM.Native                  as CPU
 import Data.Array.Accelerate.Interpreter                  as I
 
-import Data.Array.Accelerate.Math.DFT.Centre              as A
-import Data.Array.Accelerate.Math.FFT                     as A
+import Data.Array.Accelerate.Math.DFT.Centre              as A hiding (shift1D, shift2D, shift3D)
+import Data.Array.Accelerate.Math.FFT                     as A 
 
 import qualified Prelude as P
 import Prelude as P (fromIntegral, fromInteger, fromRational, String, return, (>>=), (>>), IO)
@@ -165,14 +165,95 @@ doweight theta lam p v = let
     in undefined
 ----------------------
 -- Fourier transformations
-ishift2D :: Elt a => Acc (Matrix a) -> Acc (Matrix a)
-ishift2D = shift2D
-
 fft :: Acc (Matrix (Complex Double)) -> Acc (Matrix (Complex Double))
 fft = shift2D . fft2D Forward . ishift2D
 
 ifft :: Acc (Matrix (Complex Double)) -> Acc (Matrix (Complex Double))
 ifft = shift2D . fft2D Inverse . ishift2D
+
+shift1D :: Elt e => Acc (Vector e) -> Acc (Vector e)
+shift1D arr = backpermute sh p arr  
+      where
+        sh      = shape arr
+        n       = indexHead sh
+        --
+        shift   = (n `quot` 2) + boolToInt (odd n)
+        roll i  = (i+shift) `rem` n
+        p       = ilift1 roll
+
+ishift1D :: Elt e => Acc (Vector e) -> Acc (Vector e)
+ishift1D arr = backpermute sh p arr  
+      where
+        sh      = shape arr
+        n       = indexHead sh
+        --
+        shift   = (n `quot` 2)-- + boolToInt (odd n)
+        roll i  = (i+shift) `rem` n
+        p       = ilift1 roll
+
+shift2D :: Elt e => Acc (Array DIM2 e) -> Acc (Array DIM2 e)
+shift2D arr
+  = backpermute sh p arr
+  where
+    sh      = shape arr
+    Z :. h :. w = unlift sh
+    --
+    shifth = (h `quot` 2) + boolToInt (odd h)
+    shiftw = (w `quot` 2) + boolToInt (odd w)
+
+    p ix
+      = let Z:.y:.x = unlift ix :: Z :. Exp Int :. Exp Int
+        in index2 ((y + shifth) `rem` h)
+                  ((x + shiftw) `rem` w)
+
+ishift2D :: Elt e => Acc (Array DIM2 e) -> Acc (Array DIM2 e)
+ishift2D arr
+  = backpermute sh p arr
+  where
+    sh      = shape arr
+    Z :. h :. w = unlift sh
+    --
+    shifth = (h `quot` 2)
+    shiftw = (w `quot` 2)
+
+    p ix
+      = let Z:.y:.x = unlift ix :: Z :. Exp Int :. Exp Int
+        in index2 ((y + shifth) `rem` h)
+                  ((x + shiftw) `rem` w)
+
+shift3D :: Elt e => Acc (Array DIM3 e) -> Acc (Array DIM3 e)
+shift3D arr
+  = backpermute sh p arr
+  where
+    sh      = shape arr
+    Z :. d :. h :. w = unlift sh
+    --
+    shiftd = (d `quot` 2) + boolToInt (odd d)
+    shifth = (h `quot` 2) + boolToInt (odd h)
+    shiftw = (w `quot` 2) + boolToInt (odd w)
+
+    p ix
+      = let Z:.z:.y:.x = unlift ix :: Z :. Exp Int :. Exp Int :. Exp Int
+        in index3 ((z + shiftd) `rem` d)
+                  ((y + shifth) `rem` h)
+                  ((x + shiftw) `rem` w)
+
+ishift3D :: Elt e => Acc (Array DIM3 e) -> Acc (Array DIM3 e)
+ishift3D arr
+  = backpermute sh p arr
+  where
+    sh      = shape arr
+    Z :. d :. h :. w = unlift sh
+    --
+    shiftd = (d `quot` 2)
+    shifth = (h `quot` 2)
+    shiftw = (w `quot` 2)
+
+    p ix
+      = let Z:.z:.y:.x = unlift ix :: Z :. Exp Int :. Exp Int :. Exp Int
+        in index3 ((z + shiftd) `rem` d)
+                  ((y + shifth) `rem` h)
+                  ((x + shiftw) `rem` w)
 
 ------------------------
 -- Helper functions
@@ -274,7 +355,7 @@ testing0 = fromList (Z :. 5) [0..]
 testing3 :: Int
 testing3 = indexArray testing0 (Z :. 4)
 
-ffttest0 :: Int -> (Vector Double, Vector Double, Vector Double, [(Double, Int)])
+ffttest0 :: Int -> (Vector Double, Vector Double, Vector Double, Vector Double)
 ffttest0 n = let
     halfn = fromIntegral $ (n - 1) `div` 2
     minstart = case P.even n of
@@ -283,33 +364,43 @@ ffttest0 n = let
     lst = [0..halfn] P.++ [minstart..(-1)]
     freqs = fromList (Z :. n) lst
 
-    res  =  shift1D' (use freqs)
-    res2 = ishift1D' (use freqs)
-    res3 = shiftTest lst
-    in (freqs, CPU.run res,CPU.run res2, res3)
+    res  =  shift1D (use freqs)
+    res2 = ishift1D (use freqs)
+    res3 = ishift1D (res)
+    --res3 = shiftTest lst
+    in (freqs, CPU.run res,CPU.run res2, CPU.run res3)
 
+ffttest1 :: Int -> Int -> (Matrix Double, Matrix Double, Matrix Double, Matrix Double)
+ffttest1 n0 n1 = let
+    n = n0 P.* n1
+    halfn = fromIntegral $ (n - 1) `div` 2
+    minstart = case P.even n of
+        True -> -halfn - 1
+        False -> -halfn
+    lst = [0..halfn] P.++ [minstart..(-1)]
+    freqs = fromList (Z :. n0 :. n1) lst
 
-ishift1D' :: Elt e => Acc (Vector e) -> Acc (Vector e)
-ishift1D' arr
-  = A.backpermute (A.shape arr) p arr
-  where
-    p ix
-      = let Z:.x = unlift ix :: Z :. Exp Int
-        in index1 (x A.< mw2 ? (x + mw, x - mw2))
-    Z:.w    = unlift (A.shape arr)
-    mw      = w `div` 2
-    mw2     = (w + 1) `div` 2
+    res  =  shift2D (use freqs)
+    res2 = ishift2D (use freqs)
+    res3 = ishift2D (res)
+    --res3 = shiftTest lst
+    in (freqs, CPU.run res,CPU.run res2, CPU.run res3)
 
-shift1D' :: Elt e => Acc (Vector e) -> Acc (Vector e)
-shift1D' arr
-  = A.backpermute (A.shape arr) p arr
-  where
-    p ix
-      = let Z:.x = unlift ix :: Z :. Exp Int
-        in index1 (x A.< mw2 ? (x + mw, x - mw2))
-    Z:.w    = unlift (A.shape arr)
-    mw      = w `div` 2
-    mw2     = (w + 1) `div` 2
+ffttest2 :: Int -> Int -> Int -> (Array DIM3 Double, Array DIM3 Double, Array DIM3 Double, Array DIM3 Double)
+ffttest2 n0 n1 n2 = let
+    n = n0 P.* n1 P.* n2
+    halfn = fromIntegral $ (n - 1) `div` 2
+    minstart = case P.even n of
+        True -> -halfn - 1
+        False -> -halfn
+    lst = [0..halfn] P.++ [minstart..(-1)]
+    freqs = fromList (Z :. n0 :. n1 :. n2) lst
+
+    res  =  shift3D (use freqs)
+    res2 = ishift3D (use freqs)
+    res3 = ishift3D (res)
+    --res3 = shiftTest lst
+    in (freqs, CPU.run res,CPU.run res2, CPU.run res3)
 
 shiftTest :: [Double] -> [(Double, Int)]
 shiftTest xs = let
