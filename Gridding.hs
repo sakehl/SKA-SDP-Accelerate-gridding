@@ -126,6 +126,11 @@ myfor :: Int -> (Int -> a -> a) -> a -> a
 myfor n f x | n P.== 0  = x
             | P.otherwise =  myfor (n-1) f (f (n-1) x)
 
+------------------------
+-- Helper functions
+div3 :: Exp (Double, Double, Double) -> Exp Double -> Exp (Double, Double, Double)
+div3 (unlift -> (a,b,c)) x = lift (a / x, b / x, c / x)
+
 ----------------------
 -- Testing stuff
 testData :: ([Complex Double], [(Double, Double, Double)])
