@@ -126,6 +126,54 @@ myfor :: Int -> (Int -> a -> a) -> a -> a
 myfor n f x | n P.== 0  = x
             | P.otherwise =  myfor (n-1) f (f (n-1) x)
 
+
+type ImagingFunction = Double                                  -- Field of view size
+                     -> Int                                    -- Grid size
+                     -> Vector (Double, Double, Double)        -- all the uvw baselines (coordinates) (lenght : n * (n-1))
+                     -> Vector (Int, Int, Double, Double)      -- NOT USED HERE (Antenna 1, Antenna 2, The time (in MJD UTC), Frequency (Hz)) (lenght : n * (n-1))
+                     -> Vector (Complex Double)                -- visibility  (length n * (n-1))
+                     -> Acc (Matrix (Complex Double))
+
+do_imaging :: Double                                 -- Field of view size
+           -> Int                                    -- Grid size
+           -> Vector (Double, Double, Double)        -- all the uvw baselines (coordinates) (lenght : n * (n-1))
+           -> Vector (Int, Int, Double, Double)      -- NOT USED HERE (Antenna 1, Antenna 2, The time (in MJD UTC), Frequency (Hz)) (lenght : n * (n-1))
+           -> Vector (Complex Double)                -- visibility  (length n * (n-1))
+           -> ImagingFunction
+           -> Acc (Matrix (Complex Double))
+do_imaging theta lam uvw src vis imgfn = undefined
+
+mirror_uvw :: Acc (Vector (Double, Double, Double)) -> Acc (Vector (Complex Double)) -> Acc (Vector ((Double, Double, Double), Complex Double))
+mirror_uvw uvw vis = let
+        (u,v,w) = unzip3 uvw
+        uvwvis = zip4 u v w vis
+        mirrorv o@(unlift -> (u,v,w,vis) :: (Exp Double, Exp Double, Exp Double, Exp (Complex Double))) =
+            if v < 0 
+                then lift ((u, -v, w), conjugate vis)
+                else lift ((u,v,w),vis)
+    in map mirrorv uvwvis
+
+
+doweight :: Double -> Int -> Acc (Vector (Double, Double, Double)) -> Acc (Vector (Complex Double)) -> Acc (Vector (Complex Double))
+doweight theta lam p v = let
+        n = P.round(theta * lamf)
+        lamf = fromIntegral lam
+        ne = constant n
+        lamfe = constant lamf
+        coords = frac_coords (lift (ne, ne)) 1 (map (`div3` lamfe) p)
+
+    in undefined
+----------------------
+-- Fourier transformations
+ishift2D :: Elt a => Acc (Matrix a) -> Acc (Matrix a)
+ishift2D = shift2D
+
+fft :: Acc (Matrix (Complex Double)) -> Acc (Matrix (Complex Double))
+fft = shift2D . fft2D Forward . ishift2D
+
+ifft :: Acc (Matrix (Complex Double)) -> Acc (Matrix (Complex Double))
+ifft = shift2D . fft2D Inverse . ishift2D
+
 ------------------------
 -- Helper functions
 div3 :: Exp (Double, Double, Double) -> Exp Double -> Exp (Double, Double, Double)
