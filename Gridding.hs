@@ -8,48 +8,54 @@
 module Gridding where
 
 import Data.Array.Accelerate                              as A hiding (fromInteger, fromRational, fromIntegral)
+import qualified Data.Array.Accelerate                    as A (fromInteger, fromRational, fromIntegral)
 import Data.Array.Accelerate.Data.Complex                 as A
 
 import Data.Array.Accelerate.LLVM.Native                  as CPU
 import Data.Array.Accelerate.Interpreter                  as I
 
+import Data.Array.Accelerate.Math.DFT.Centre              as A
+import Data.Array.Accelerate.Math.FFT                     as A
+
 import qualified Prelude as P
-import Prelude as P (fromIntegral, fromInteger, fromRational, String, return, (>>=), IO)
+import Prelude as P (fromIntegral, fromInteger, fromRational, String, return, (>>=), (>>), IO)
 import Data.Char
+import Text.Printf
+import Data.List (intersperse, intercalate)
 
 import Debug.Trace
 import System.IO.Unsafe (unsafePerformIO)
 import Control.Exception
 
+
 -------------------------------
 -- Gridding Accelerate code
 
 -- # Simple imaging
-simple_imaging :: Exp Double                             -- Field of view size
-               -> Exp Int                                -- Grid size
+simple_imaging :: Double                                 -- Field of view size
+               -> Int                                    -- Grid size
                -> Vector (Double, Double, Double)        -- all the uvw baselines (coordinates) (lenght : n * (n-1))
                -> Vector (Int, Int, Double, Double)      -- NOT USED HERE (Antenna 1, Antenna 2, The time (in MJD UTC), Frequency (Hz)) (lenght : n * (n-1))
                -> Vector (Complex Double)                -- visibility  (length n * (n-1))
                -> Acc (Matrix (Complex Double))
 simple_imaging theta lam uvw src vis =
-    let n = round(theta * fromIntegral lam)
-        p = map (`div3` fromIntegral lam) (use uvw)
+    let lamf = fromIntegral lam
+        n = P.round(theta * lamf)
+        ne = constant n
+        p = map (`div3` constant lamf) (use uvw)
         czero = constant $ 0 :+ 0
-        guv = fill (index2 n n) czero
-    in grid guv p (use vis)
-    where
-        div3 :: Exp (Double, Double, Double) -> Exp Double -> Exp (Double, Double, Double)
-        div3 (unlift -> (a,b,c)) x = lift (a / x, b / x, c / x)
+        guv = fill (index2 ne ne) czero
+    in grid guv p (use vis)    
 
 grid :: Acc (Matrix (Complex Double))                    -- Destination grid N x N of complex numbers
-     -> Acc (Vector (Double, Double, Double))              -- The uvw baselines, but between -.5 and .5
+     -> Acc (Vector (Double, Double, Double))            -- The uvw baselines, but between -.5 and .5
      -> Acc (Vector (Complex Double))                    -- The visiblities
      -> Acc (Matrix (Complex Double))
 grid a p v = permute (+) a (\i -> xy ! i) v
     where
         Z :. n :. _ = unlift (shape a) :: Z :. Exp Int :. Exp Int
         halfn = n `div` 2
-        nf = fromIntegral n :: Exp Double
+        nf = A.fromIntegral n :: Exp Double
         xy = map gridxy p :: Acc (Vector DIM2)
 
         -- Note the order, python specified as a[y, x] += v
@@ -63,23 +69,23 @@ grid a p v = permute (+) a (\i -> xy ! i) v
 -- # Normal imaging
 frac_coord :: Exp Int                                   -- The height/width
            -> Exp Int                                   -- Oversampling factor
-           -> Acc (Vector Double)                        -- a uvw baseline, but between -.5 and .5
+           -> Acc (Vector Double)                       -- a uvw baseline, but between -.5 and .5
            -> Acc (Vector (Int, Int))
 frac_coord n qpx p = 
     let halfn = n `div` 2
-        halfnf = fromIntegral halfn
-        nf = fromIntegral n
-        qpxf = fromIntegral qpx
+        halfnf = A.fromIntegral halfn
+        nf = A.fromIntegral n
+        qpxf = A.fromIntegral qpx
         qpxfrac = 0.5 / qpxf
 
         x   = map (\a -> halfnf + a * nf) p
         flx = map (\a -> floor (a + qpxfrac) ) x
-        fracx = zipWith (\a b -> round ((a - (fromIntegral b) )* qpxf) ) x flx
+        fracx = zipWith (\a b -> round ((a - (A.fromIntegral b) )* qpxf) ) x flx
     in zip flx fracx
 
 frac_coords :: Exp (Int, Int)                           -- (Heigt, width) of the grid
             -> Exp Int                                  -- Oversampling factor
-            -> Acc (Vector (Double, Double, Double))       -- The uvw baselines, but between -.5 and .5
+            -> Acc (Vector (Double, Double, Double))    -- The uvw baselines, but between -.5 and .5
             -> Acc (Vector (Int, Int, Int, Int))
 -- NOTE we should give it in height, width order.
 frac_coords (unlift -> (h, w) ) qpx p =
@@ -90,7 +96,7 @@ frac_coords (unlift -> (h, w) ) qpx p =
 
 convgrid :: Array DIM4 (Complex Double)                  -- The oversampled convolution kernel
          -> Acc (Matrix (Complex Double))                -- Destination grid N x N of complex numbers
-         -> Acc (Vector (Double, Double, Double))          -- The uvw baselines, but between -.5 and .5
+         -> Acc (Vector (Double, Double, Double))        -- The uvw baselines, but between -.5 and .5
          -> Acc (Vector (Complex Double))                -- The visiblities
          -> Acc (Matrix (Complex Double))
 convgrid gcf a p v =
@@ -125,8 +131,8 @@ myfor n f x | n P.== 0  = x
 testData :: ([Complex Double], [(Double, Double, Double)])
 testData = unsafePerformIO testData0
 
-testSimple :: IO ()
-testSimple = do
+testSimple :: Int -> Int -> IO ()
+testSimple i j = do
     testData <- testData0
     let n   = (P.length . P.fst) testData
         m   = (P.length . P.snd) testData
@@ -138,12 +144,30 @@ testSimple = do
         lam      = 18000
         result = simple_imaging theta lam uvw src vis
         runresult = CPU.run result
-        fst = indexArray runresult (Z :. 0 :. 0)
-    P.putStrLn (P.show fst)
+        fst = indexArray runresult (Z :. i :. j)
+        maxi = P.maximum (toList runresult)
+    --P.writeFile "result.csv" (makeFile runresult)
+    P.putStrLn (P.show maxi)
 
+instance (P.Ord a) => P.Ord (Complex a)
+    where
+        (x1 :+ y1) <=  (x2 :+ y2) | x1 P.== x2 = y1 P.<= y2
+                                  | P.otherwise = x1 P.<= x2
 
+makeFile :: Matrix (Complex Double) -> String
+makeFile mat = let
+    (Z :. n :. m) = arrayShape  mat
+    ls =  P.map showC $ toList mat
+    lss = toRows n [] ls :: [[String]]
+    rows = P.map (intercalate ",") lss :: [String]
 
+    toRows _ res [] = P.reverse res
+    toRows n res ys = let (x, xs) = P.splitAt n ys
+                      in toRows n (x : res) xs
 
+    showC (x :+ y) | y P.>= 0 = '(' : printf "%e" x P.++ '+' : printf "%e" y P.++ "j)"
+                   | P.otherwise = '(' : printf "%e" x P.++ printf "%e" y P.++ "j)"
+    in P.unlines rows
 
 
 -------------------------
@@ -196,6 +220,57 @@ testing0 = fromList (Z :. 5) [0..]
 
 testing3 :: Int
 testing3 = indexArray testing0 (Z :. 4)
+
+ffttest0 :: Int -> (Vector Double, Vector Double, Vector Double, [(Double, Int)])
+ffttest0 n = let
+    halfn = fromIntegral $ (n - 1) `div` 2
+    minstart = case P.even n of
+        True -> -halfn - 1
+        False -> -halfn
+    lst = [0..halfn] P.++ [minstart..(-1)]
+    freqs = fromList (Z :. n) lst
+
+    res  =  shift1D' (use freqs)
+    res2 = ishift1D' (use freqs)
+    res3 = shiftTest lst
+    in (freqs, CPU.run res,CPU.run res2, res3)
+
+
+ishift1D' :: Elt e => Acc (Vector e) -> Acc (Vector e)
+ishift1D' arr
+  = A.backpermute (A.shape arr) p arr
+  where
+    p ix
+      = let Z:.x = unlift ix :: Z :. Exp Int
+        in index1 (x A.< mw2 ? (x + mw, x - mw2))
+    Z:.w    = unlift (A.shape arr)
+    mw      = w `div` 2
+    mw2     = (w + 1) `div` 2
+
+shift1D' :: Elt e => Acc (Vector e) -> Acc (Vector e)
+shift1D' arr
+  = A.backpermute (A.shape arr) p arr
+  where
+    p ix
+      = let Z:.x = unlift ix :: Z :. Exp Int
+        in index1 (x A.< mw2 ? (x + mw, x - mw2))
+    Z:.w    = unlift (A.shape arr)
+    mw      = w `div` 2
+    mw2     = (w + 1) `div` 2
+
+shiftTest :: [Double] -> [(Double, Int)]
+shiftTest xs = let
+    temp = addindex 0 xs
+    addindex n [] = []
+    addindex n (x:xs) = (x, n) : addindex (n+1) xs
+
+    w = P.length xs
+    mw      = w `P.div` 2
+    mw2     = (w + 1) `P.div` 2
+    indexer (v,x) = case x P.< mw2 of
+        True  -> (v, x + mw)
+        False -> (v, x -mw2)
+    in P.map indexer temp
 
 --runAcc = CPU.run 
 {-
