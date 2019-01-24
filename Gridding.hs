@@ -59,7 +59,7 @@ grid a p v = permute (+) a (\i -> xy ! i) v
         xy = map gridxy p :: Acc (Vector DIM2)
 
         -- Note the order, python specified as a[y, x] += v
-        -- We do the same
+        -- We do the same. This is correct, first y then x in the index2 function
         gridxy :: Exp (Double, Double, Double) -> Exp DIM2
         gridxy (unlift -> (x, y, _ :: Exp Double)) = index2 (toGridCell y) (toGridCell x)
 
@@ -158,11 +158,17 @@ doweight :: Double -> Int -> Acc (Vector (Double, Double, Double)) -> Acc (Vecto
 doweight theta lam p v = let
         n = P.round(theta * lamf)
         lamf = fromIntegral lam
-        ne = constant n
+        ne = constant n :: Exp Int
         lamfe = constant lamf
+        gw = fill (index2 ne ne) 0 :: Acc (Matrix Double)
         coords = frac_coords (lift (ne, ne)) 1 (map (`div3` lamfe) p)
+        (x,_,y,_) = unzip4 coords
+        ones  = fill (shape x) 1 :: Acc (Vector Double)
+        xyindex = zipWith index2 y x
+        weights = permute (+) gw (\id -> xyindex ! id) ones
 
-    in undefined
+        newv = imap (\id v -> v / lift (weights ! (xyindex ! id) :+ 0)) v 
+    in newv
 ----------------------
 -- Fourier transformations
 fft :: Acc (Matrix (Complex Double)) -> Acc (Matrix (Complex Double))
@@ -354,6 +360,12 @@ testing0 = fromList (Z :. 5) [0..]
 
 testing3 :: Int
 testing3 = indexArray testing0 (Z :. 4)
+
+testing4 :: Matrix Int
+testing4 = fromList (Z :. 5 :. 2) [0..]
+
+testing5 :: Int -> Int -> Int
+testing5 x y = runExp $ (use testing4) ! index2 (constant y) (constant x)
 
 ffttest0 :: Int -> (Vector Double, Vector Double, Vector Double, Vector Double)
 ffttest0 n = let
