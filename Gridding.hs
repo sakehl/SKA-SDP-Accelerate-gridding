@@ -27,25 +27,30 @@ import Debug.Trace
 import System.IO.Unsafe (unsafePerformIO)
 import Control.Exception
 
+import Control.Lens as L (_1, _2)
 
+data Kwargs = Kwargs { convolutionKernel :: Array DIM4 (Complex Double)}
 -------------------------------
 -- Gridding Accelerate code
+type ImagingFunction = Double                                        -- Field of view size
+                     -> Int                                          -- Grid size
+                     -> Acc (Vector (Double, Double, Double))        -- all the uvw baselines (coordinates) (lenght : n * (n-1))
+                     -> Acc (Vector (Int, Int, Double, Double))      -- (Antenna 1, Antenna 2, The time (in MJD UTC), Frequency (Hz)) (lenght : n * (n-1))
+                     -> Acc (Vector (Complex Double))                -- visibility  (length n * (n-1))
+                     -> Kwargs                                       -- The additional options that you can give
+                     -> Acc (Matrix (Complex Double))
 
 -- # Simple imaging
-simple_imaging :: Double                                 -- Field of view size
-               -> Int                                    -- Grid size
-               -> Vector (Double, Double, Double)        -- all the uvw baselines (coordinates) (lenght : n * (n-1))
-               -> Vector (Int, Int, Double, Double)      -- NOT USED HERE (Antenna 1, Antenna 2, The time (in MJD UTC), Frequency (Hz)) (lenght : n * (n-1))
-               -> Vector (Complex Double)                -- visibility  (length n * (n-1))
-               -> Acc (Matrix (Complex Double))
-simple_imaging theta lam uvw src vis =
+simple_imaging :: ImagingFunction
+simple_imaging theta lam uvw src vis kwargs =
     let lamf = fromIntegral lam
         n = P.round(theta * lamf)
         ne = constant n
-        p = map (`div3` constant lamf) (use uvw)
-        czero = constant $ 0 :+ 0
+
+        p = map (`div3` constant lamf) uvw
+        czero = constant 0
         guv = fill (index2 ne ne) czero
-    in grid guv p (use vis)    
+    in grid guv p vis
 
 grid :: Acc (Matrix (Complex Double))                    -- Destination grid N x N of complex numbers
      -> Acc (Vector (Double, Double, Double))            -- The uvw baselines, but between -.5 and .5
@@ -67,6 +72,18 @@ grid a p v = permute (+) a (\i -> xy ! i) v
         toGridCell f = halfn + floor (0.5 + nf * f)
 
 -- # Normal imaging
+conv_imaging :: ImagingFunction
+conv_imaging theta lam uvw src vis kwargs =
+    let kv = convolutionKernel kwargs
+        lamf = fromIntegral lam
+        n = P.round(theta * lamf)
+        ne = constant n
+
+        p = map (`div3` constant lamf) uvw
+        czero = constant 0
+        guv = fill (index2 ne ne) czero
+    in convgrid kv guv p vis
+
 frac_coord :: Exp Int                                   -- The height/width
            -> Exp Int                                   -- Oversampling factor
            -> Acc (Vector Double)                       -- a uvw baseline, but between -.5 and .5
@@ -127,21 +144,44 @@ myfor n f x | n P.== 0  = x
             | P.otherwise =  myfor (n-1) f (f (n-1) x)
 
 
-type ImagingFunction = Double                                  -- Field of view size
-                     -> Int                                    -- Grid size
-                     -> Vector (Double, Double, Double)        -- all the uvw baselines (coordinates) (lenght : n * (n-1))
-                     -> Vector (Int, Int, Double, Double)      -- NOT USED HERE (Antenna 1, Antenna 2, The time (in MJD UTC), Frequency (Hz)) (lenght : n * (n-1))
-                     -> Vector (Complex Double)                -- visibility  (length n * (n-1))
-                     -> Acc (Matrix (Complex Double))
-
+----------------------------------
+-- Processing the imaging functions
 do_imaging :: Double                                 -- Field of view size
            -> Int                                    -- Grid size
            -> Vector (Double, Double, Double)        -- all the uvw baselines (coordinates) (lenght : n * (n-1))
-           -> Vector (Int, Int, Double, Double)      -- NOT USED HERE (Antenna 1, Antenna 2, The time (in MJD UTC), Frequency (Hz)) (lenght : n * (n-1))
+           -> Vector (Int, Int, Double, Double)      -- (Antenna 1, Antenna 2, The time (in MJD UTC), Frequency (Hz)) (lenght : n * (n-1))
            -> Vector (Complex Double)                -- visibility  (length n * (n-1))
            -> ImagingFunction
-           -> Acc (Matrix (Complex Double))
-do_imaging theta lam uvw src vis imgfn = undefined
+           -> Kwargs
+           -> Acc (Matrix Double,Matrix Double, Scalar Double)
+do_imaging theta lam uvw src vis imgfn kwargs = 
+    let
+        -- TODO: if src == None: src = numpy.ndarray((len(vis), 0))
+        len = arrayShape vis
+        uvw0 = use uvw
+        vis0 = use vis
+        src0 = use src
+        -- Mirror baselines such that v>0
+        (uvw1,vis1) = unzip $ mirror_uvw uvw0 vis0
+        
+        -- Determine weights
+        ones = fill (lift len) 1
+        wt = doweight theta lam uvw1 ones
+
+        -- Make image
+        cdrt = imgfn theta lam uvw1 src0 (zipWith (*) wt vis1) kwargs
+        drt = (map real . ifft . make_grid_hermitian) cdrt
+        -- Make point spread function
+        c = imgfn theta lam uvw1 src0 wt kwargs
+        psf = (map real . ifft . make_grid_hermitian) c
+        -- Normalise
+        -- TODO: Question, should I run it here? To get the maximum? Cause I don't see another way now
+        pmaxv = (maximum . flatten) psf
+        pmax = the pmaxv
+        res0 = map (/ pmax) drt
+        res1 = map (/ pmax) psf
+        res2 = pmaxv
+    in lift (res0, res1, res2)
 
 mirror_uvw :: Acc (Vector (Double, Double, Double)) -> Acc (Vector (Complex Double)) -> Acc (Vector ((Double, Double, Double), Complex Double))
 mirror_uvw uvw vis = 
@@ -171,6 +211,28 @@ doweight theta lam p v =
 
         newv = imap (\id v -> v / lift (weights ! (xyindex ! id) :+ 0)) v 
     in newv
+
+make_grid_hermitian :: Acc (Matrix (Complex Double)) -> Acc (Matrix (Complex Double))
+make_grid_hermitian guv = let
+        sh = shape guv
+        Z :. n :. _ = unlift sh :: Z :. Exp Int :. Exp Int
+        indexer (unlift -> Z :. y :. x) = if x== 0 || y == 0 
+            then index2 y x 
+            else index2 (n - y) (n - x)
+        mapper (unlift -> Z :. y :. x) v = if x== 0 || y == 0 
+            then 0
+            else conjugate v
+
+        -- Make mirror image, then add its conjugate to the original grid.
+        -- We mirror on the zero point, which is off-center if the grid has even size
+        oddReshape = (reverseOn _2 . reverseOn _1) guv
+        evenReshape = backpermute sh indexer guv
+
+        oddConj = map conjugate oddReshape
+        evenConj = imap mapper evenReshape
+
+        reshapedConj = if even n then evenConj else oddConj
+    in zipWith (+) guv reshapedConj
 ----------------------
 -- Fourier transformations
 fft :: Acc (Matrix (Complex Double)) -> Acc (Matrix (Complex Double))
@@ -269,12 +331,14 @@ div3 :: Exp (Double, Double, Double) -> Exp Double -> Exp (Double, Double, Doubl
 div3 (unlift -> (a,b,c)) x = lift (a / x, b / x, c / x)
 
 ----------------------
--- Testing stuff
+-- I/O things (for testing)
 testData :: ([Complex Double], [(Double, Double, Double)])
 testData = unsafePerformIO testData0
 
-testSimple :: Int -> Int -> IO ()
-testSimple i j = do
+main = testSimple
+
+testSimple :: IO ()
+testSimple = do
     testData <- testData0
     let n   = (P.length . P.fst) testData
         m   = (P.length . P.snd) testData
@@ -284,22 +348,26 @@ testSimple i j = do
         src      = undefined
         theta    = 2*0.05
         lam      = 18000
-        result = simple_imaging theta lam uvw src vis
-        runresult = CPU.run result
-        fst = indexArray runresult (Z :. i :. j)
-        maxi = P.maximum (toList runresult)
-    --P.writeFile "result.csv" (makeFile runresult)
-    P.putStrLn (P.show maxi)
+        kwargs   = undefined
+        (d,p, _) = CPU.run $ do_imaging theta lam uvw src vis simple_imaging kwargs
+        (muvw, mvis) = unzip $ mirror_uvw (use uvw) (use vis)
+
+        fst i j = indexArray d (Z :. i :. j)
+        maxi = P.maximum (toList d)
+    P.writeFile "data/mirror_uvw.csv" (makeVFile (showTriple $ printf "%e") (CPU.run muvw))
+    P.writeFile "data/result.csv" (makeMFile (printf "%e") d)
+    P.writeFile "data/result_p.csv" (makeMFile (printf "%e") p)
+    -- P.putStrLn (P.show maxi)
 
 instance (P.Ord a) => P.Ord (Complex a)
     where
         (x1 :+ y1) <=  (x2 :+ y2) | x1 P.== x2 = y1 P.<= y2
                                   | P.otherwise = x1 P.<= x2
 
-makeFile :: Matrix (Complex Double) -> String
-makeFile mat = let
+makeMFile :: (a -> String) -> Matrix a -> String
+makeMFile showf mat = let
     (Z :. n :. m) = arrayShape  mat
-    ls =  P.map showC $ toList mat
+    ls =  P.map showf $ toList mat
     lss = toRows n [] ls :: [[String]]
     rows = P.map (intercalate ",") lss :: [String]
 
@@ -307,11 +375,26 @@ makeFile mat = let
     toRows n res ys = let (x, xs) = P.splitAt n ys
                       in toRows n (x : res) xs
 
-    showC (x :+ y) | y P.>= 0 = '(' : printf "%e" x P.++ '+' : printf "%e" y P.++ "j)"
-                   | P.otherwise = '(' : printf "%e" x P.++ printf "%e" y P.++ "j)"
     in P.unlines rows
 
+makeVFile :: (a -> String) -> Vector a -> String
+makeVFile showf v = let
+    (Z :. n) = arrayShape v
+    ls =  P.map showf $ toList v
+    in P.unlines ls
 
+makeVFileC :: Vector (Complex Double) -> String
+makeVFileC = makeVFile showC
+
+makeMFileC :: Matrix (Complex Double) -> String
+makeMFileC = makeMFile showC
+    
+showC :: Complex Double -> String
+showC (x :+ y) | y P.>= 0 = '(' : printf "%e" x P.++ '+' : printf "%e" y P.++ "j)"
+                | P.otherwise = '(' : printf "%e" x P.++ printf "%e" y P.++ "j)"
+
+showTriple :: (a -> String) -> (a,a,a) -> String
+showTriple print (x,y,z) = (intercalate ",") $ print x : print y : print z : []
 -------------------------
 -- Test input reading
 testData0 :: IO ([Complex Double], [(Double, Double, Double)])
@@ -369,6 +452,18 @@ testing4 = fromList (Z :. 5 :. 2) [0..]
 testing5 :: Int -> Int -> Int
 testing5 x y = runExp $ (use testing4) ! index2 (constant y) (constant x)
 
+testing6 :: Elt e => Acc (Matrix e) -> Acc (Matrix e)
+testing6 guv = let
+    sh = shape guv
+    Z :. n :. _ = unlift sh :: Z :. Exp Int :. Exp Int
+    indexer (unlift -> Z :. y :. x) = if x== 0 || y == 0 
+        then index2 y x 
+        else index2 (n - y) (n - x) 
+
+    oddReshape = (reverseOn _2 . reverseOn _1) guv
+    evenReshape = backpermute sh indexer guv
+    in if even n then evenReshape else oddReshape
+
 ffttest0 :: Int -> (Vector Double, Vector Double, Vector Double, Vector Double)
 ffttest0 n = let
     halfn = fromIntegral $ (n - 1) `div` 2
@@ -399,6 +494,16 @@ ffttest1 n0 n1 = let
     res3 = ishift2D (res)
     --res3 = shiftTest lst
     in (freqs, CPU.run res,CPU.run res2, CPU.run res3)
+
+ffttest1_ :: Int -> Int -> Matrix Double
+ffttest1_ n0 n1 = let
+    n = n0 P.* n1
+    halfn = fromIntegral $ (n - 1) `div` 2
+    minstart = case P.even n of
+        True -> -halfn - 1
+        False -> -halfn
+    lst = [0..halfn] P.++ [minstart..(-1)]
+    in fromList (Z :. n0 :. n1) lst
 
 ffttest2 :: Int -> Int -> Int -> (Array DIM3 Double, Array DIM3 Double, Array DIM3 Double, Array DIM3 Double)
 ffttest2 n0 n1 n2 = let
