@@ -144,18 +144,20 @@ do_imaging :: Double                                 -- Field of view size
 do_imaging theta lam uvw src vis imgfn = undefined
 
 mirror_uvw :: Acc (Vector (Double, Double, Double)) -> Acc (Vector (Complex Double)) -> Acc (Vector ((Double, Double, Double), Complex Double))
-mirror_uvw uvw vis = let
+mirror_uvw uvw vis = 
+    let
         (u,v,w) = unzip3 uvw
         uvwvis = zip4 u v w vis
         mirrorv o@(unlift -> (u,v,w,vis) :: (Exp Double, Exp Double, Exp Double, Exp (Complex Double))) =
             if v < 0 
-                then lift ((u, -v, w), conjugate vis)
+                then lift ((-u, -v, -w), conjugate vis)
                 else lift ((u,v,w),vis)
     in map mirrorv uvwvis
 
 
 doweight :: Double -> Int -> Acc (Vector (Double, Double, Double)) -> Acc (Vector (Complex Double)) -> Acc (Vector (Complex Double))
-doweight theta lam p v = let
+doweight theta lam p v = 
+    let
         n = P.round(theta * lamf)
         lamf = fromIntegral lam
         ne = constant n :: Exp Int
