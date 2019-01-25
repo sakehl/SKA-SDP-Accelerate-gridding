@@ -16,19 +16,32 @@ import Data.Array.Accelerate.LLVM.Native                  as CPU
 import Data.Array.Accelerate.Interpreter                  as I
 
 import qualified Prelude as P
-import Prelude as P (fromIntegral, fromInteger, fromRational, String, return, (>>=), (>>), IO)
+import Prelude as P (fromIntegral, fromInteger, fromRational, String, return, (>>=), (>>), IO, Maybe(..), maybe)
 
 import Control.Lens as L (_1, _2)
 
-data Kwargs = Kwargs { convolutionKernel :: Array DIM4 (Complex Double)}
+import Data.Maybe (fromJust, fromMaybe)
+
+data Kwargs = Kwargs { convolutionKernel :: Maybe (Array DIM4 (Complex Double))
+                     , wSteps :: Maybe Int
+                     , kernelCache :: Maybe (Int -> Array DIM4 (Complex Double))
+                     -- TODO: Make good type for kernel_fn
+                     , kernelFunction :: Maybe (Double -> Int -> Array DIM4 (Complex Double))
+                     , patHorShift :: Maybe Int
+                     , patVerShift :: Maybe Int
+                     , patTransMat :: Maybe (Acc (Matrix Double))
+                     }
+
+noArgs :: Kwargs
+noArgs = Kwargs Nothing Nothing Nothing Nothing Nothing Nothing Nothing
 -------------------------------
 -- Gridding Accelerate code
-type ImagingFunction = Double                                        -- Field of view size
-                     -> Int                                          -- Grid size
-                     -> Acc (Vector (Double, Double, Double))        -- all the uvw baselines (coordinates) (lenght : n * (n-1))
-                     -> Acc (Vector (Int, Int, Double, Double))      -- (Antenna 1, Antenna 2, The time (in MJD UTC), Frequency (Hz)) (lenght : n * (n-1))
-                     -> Acc (Vector (Complex Double))                -- visibility  (length n * (n-1))
-                     -> Kwargs                                       -- The additional options that you can give
+type ImagingFunction = Double                                        -- (theta) Field of view size
+                     -> Int                                          -- (lam) Grid size
+                     -> Acc (Vector (Double, Double, Double))        -- (uvw) all the uvw baselines (coordinates) (lenght : n * (n-1))
+                     -> Acc (Vector (Int, Int, Double, Double))      -- (src) (Antenna 1, Antenna 2, The time (in MJD UTC), Frequency (Hz)) (lenght : n * (n-1))
+                     -> Acc (Vector (Complex Double))                -- (vis) visibility  (length n * (n-1))
+                     -> Kwargs                                       -- (kwargs) The additional options that you can give
                      -> Acc (Matrix (Complex Double))
 
 -- # Simple imaging
@@ -65,7 +78,7 @@ grid a p v = permute (+) a (\i -> xy ! i) v
 -- # Normal imaging
 conv_imaging :: ImagingFunction
 conv_imaging theta lam uvw src vis kwargs =
-    let kv = convolutionKernel kwargs
+    let kv = fromJust $ convolutionKernel kwargs
         lamf = fromIntegral lam
         n = P.round(theta * lamf)
         ne = constant n
@@ -130,6 +143,18 @@ convgrid gcf a p v =
         
     in myfor gh (\i -> myfor gw (fullrepli i)) a
 
+
+-- Imaging with a w kernel
+w_cache_imaging :: ImagingFunction
+w_cache_imaging theta lam uvw src vis kwargs@Kwargs{wSteps = wstep, kernelCache = kernel_cache, kernelFunction = kernel_fn} =
+    let lamf = fromIntegral lam
+        n = P.round(theta * lamf)
+        ne = constant n
+
+        p = map (`div3` constant lamf) uvw
+        czero = constant 0
+        guv = fill (index2 ne ne) czero :: Acc (Matrix (Complex Double))
+    in undefined
 ----------------------------------
 -- Processing the imaging functions
 do_imaging :: Double                                 -- Field of view size
@@ -224,6 +249,53 @@ make_grid_hermitian guv = let
 
         reshapedConj = if even n then evenConj else oddConj
     in zipWith (+) guv reshapedConj
+
+
+----------------------
+-- Kernels
+w_kernel :: Double                                          -- Field of view
+         -> Double                                          -- Baseline distance to the projection plane
+         -> Int                                             -- Far field size
+         -> Int                                             -- Size of convolution
+         -> Int                                             -- Oversampling
+         -> Kwargs                                           
+         -> Array DIM4 (Complex Double)                     
+w_kernel theta w npixFF npixKern qpx kwargs =
+    let
+        (l, m) = undefined
+    in undefined
+
+kernel_coordinates :: Exp Int -> Exp Double -> Kwargs -> Acc ((Matrix Double), (Matrix Double))
+kernel_coordinates n theta kwargs =
+    let
+        dl = (constant . fromIntegral . fromMaybe 0 . patHorShift) kwargs
+        dm = (constant . fromIntegral . fromMaybe 0 . patVerShift) kwargs
+        (l,m) = unlift $ coordinates2 (n) :: (Acc (Matrix Double), Acc (Matrix Double))-- * theta 
+        lm1 = map (liftTupf (*theta) (*theta)) (zip l m)
+        lm2 = case patTransMat kwargs of
+            Nothing -> lm1
+            Just t  -> map (\pair -> let (x, y) = unlift pair in lift
+                ( (t ! index2 0 0) * x + (t ! index2 1 0) * y
+                , (t ! index2 0 1) * x + (t ! index2 1 1) * y ) ) lm1
+        
+        lm3 = map (liftTupf (+dl) (+dm)) lm2
+
+
+    in lift $ unzip lm3
+
+coordinates2 :: Exp Int -> Acc (Matrix Double, Matrix Double)
+coordinates2 n =
+    let
+        n2 = n `div` 2
+        sh = index1 n 
+        sh2 = index2 n n
+        start = A.fromIntegral (-n2) * step
+        step = 1 / A.fromIntegral n
+        base = enumFromStepN sh start step :: Acc (Vector Double)
+        samecolumns = replicate (lift (Z :. n :. All)) base
+        samerows = replicate (lift (Z :. All :. n)) base
+    in lift (samecolumns, samerows)
+
 ----------------------
 -- Fourier transformations
 fft :: Acc (Matrix (Complex Double)) -> Acc (Matrix (Complex Double))
@@ -324,3 +396,6 @@ div3 (unlift -> (a,b,c)) x = lift (a / x, b / x, c / x)
 myfor :: Int -> (Int -> a -> a) -> a -> a
 myfor n f x | n P.== 0  = x
             | P.otherwise =  myfor (n-1) f (f (n-1) x)
+
+liftTupf :: (Elt a, Elt b) => (Exp a -> Exp a) -> (Exp b -> Exp b) -> Exp (a,b) -> Exp (a,b)
+liftTupf f g (unlift -> (a, b)) = lift (f a, g b)
