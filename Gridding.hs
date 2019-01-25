@@ -168,7 +168,9 @@ do_imaging theta lam uvw src vis imgfn kwargs =
         res2 = pmaxv
     in lift (res0, res1, res2)
 
-mirror_uvw :: Acc (Vector (Double, Double, Double)) -> Acc (Vector (Complex Double)) -> Acc (Vector ((Double, Double, Double), Complex Double))
+mirror_uvw :: Acc (Vector (Double, Double, Double))                     -- all the uvw baselines (coordinates) (lenght : n * (n-1))
+           -> Acc (Vector (Complex Double))                             -- visibility  (length n * (n-1))
+           -> Acc (Vector ((Double, Double, Double), Complex Double))
 mirror_uvw uvw vis = 
     let
         (u,v,w) = unzip3 uvw
@@ -180,7 +182,11 @@ mirror_uvw uvw vis =
     in map mirrorv uvwvis
 
 
-doweight :: Double -> Int -> Acc (Vector (Double, Double, Double)) -> Acc (Vector (Complex Double)) -> Acc (Vector (Complex Double))
+doweight :: Double                                                  -- Field of view size
+         -> Int                                                     -- Grid size
+         -> Acc (Vector (Double, Double, Double))                   -- all the uvw baselines (coordinates) (lenght : n * (n-1))
+         -> Acc (Vector (Complex Double))                           -- Array of ones (same size as visibility  (length n * (n-1)))
+         -> Acc (Vector (Complex Double))
 doweight theta lam p v = 
     let
         n = P.round(theta * lamf)
