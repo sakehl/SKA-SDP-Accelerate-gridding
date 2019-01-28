@@ -253,17 +253,18 @@ make_grid_hermitian guv = let
 
 ----------------------
 -- Kernels
-w_kernel :: Double                                          -- Field of view
-         -> Double                                          -- Baseline distance to the projection plane
-         -> Int                                             -- Far field size
-         -> Int                                             -- Size of convolution
-         -> Int                                             -- Oversampling
-         -> Kwargs                                           
-         -> Array DIM4 (Complex Double)                     
+w_kernel :: Exp Double                           -- Field of view
+         -> Exp Double                           -- Baseline distance to the projection plane
+         -> Exp Int                              -- Far field size
+         -> Exp Int                              -- Size of convolution
+         -> Exp Int                              -- Oversampling
+         -> Kwargs                               -- Additional kernel arguments               
+         -> Acc (Array DIM4 (Complex Double))    -- [Qpx,Qpx,s,s] shaped oversampled convolution kernels             
 w_kernel theta w npixFF npixKern qpx kwargs =
     let
-        (l, m) = undefined
-    in undefined
+        (l, m) = unlift $ kernel_coordinates npixFF theta kwargs :: (Acc (Matrix Double), Acc (Matrix Double))
+        kern = w_kernel_function l m w
+    in kernel_oversample kern npixFF qpx npixKern
 
 kernel_coordinates :: Exp Int -> Exp Double -> Kwargs -> Acc ((Matrix Double), (Matrix Double))
 kernel_coordinates n theta kwargs =
@@ -279,8 +280,6 @@ kernel_coordinates n theta kwargs =
                 , (t ! index2 0 1) * x + (t ! index2 1 1) * y ) ) lm1
         
         lm3 = map (liftTupf (+dl) (+dm)) lm2
-
-
     in lift $ unzip lm3
 
 coordinates2 :: Exp Int -> Acc (Matrix Double, Matrix Double)
@@ -295,6 +294,69 @@ coordinates2 n =
         samecolumns = replicate (lift (Z :. n :. All)) base
         samerows = replicate (lift (Z :. All :. n)) base
     in lift (samecolumns, samerows)
+
+
+w_kernel_function :: Acc (Matrix Double)              -- Horizontal image coordinates
+                  -> Acc (Matrix Double)              -- Vertical image coordinates
+                  -> Exp Double                       -- Baseline distance to the projection plane
+                  -> Acc (Matrix (Complex Double))    --N x N array with the far field
+w_kernel_function l m w = 
+    let r2 = zipWith (\x y -> x**x + y*y) l m
+    {-  dl and dm seem to be always zero anyway in the reference code
+        dl = 0
+        dm = 0
+        ph1 = zipWith3 (\r2' l' m' -> 1 - sqrt (1 - r2') - dl * l' - dm * m') r2 l m
+        ph2 = map (\r2' -> 1 - sqrt (1 - r2')) r2
+        ph  = if dl == 0 && dm == 0 then ph2 else ph1
+    -}
+        ph = map (\r2' -> 1 - sqrt (1 - r2')) r2
+        cp = map (\ph' -> (exp . lift) (0 :+ 2 * pi * w * ph') ) ph
+    in cp
+
+kernel_oversample :: Acc (Matrix (Complex Double))       -- Far field pattern
+                  -> Exp Int                             -- Image size without oversampling
+                  -> Exp Int                             -- Factor to oversample by -- there will be Qpx x Qpx convolution arl
+                  -> Exp Int                             -- Size of convolution function to extract
+                  -> Acc (Array DIM4 (Complex Double))   -- array of shape [ov, ou, v, u], e.g. with sub-pixel
+kernel_oversample ff n qpx s =
+    let
+        -- Pad the far field to the required pixel size
+        padff = pad_mid ff (n*qpx)
+        -- Obtain oversampled uv-grid
+        af = ifft padff
+    in extract_oversampled af qpx s
+
+pad_mid :: Acc (Matrix (Complex Double))    -- The input far field. Should be smaller than NxN
+        -> Exp Int                          -- The desired far field size
+        -> Acc (Matrix (Complex Double))    -- The far field, NxN
+pad_mid ff n = 
+    let
+        Z :. n0 :. n0w = (unlift . shape) ff :: Z :. Exp Int :. Exp Int
+        result = if n == n0 then ff else padded
+        pad_width = lift ((n `div` 2)-(n0 `div` 2), (n+1 `div` 2)-(n0+1 `div` 2))
+        padded = padder ff pad_width pad_width 0
+    in result
+
+extract_oversampled :: Acc (Matrix (Complex Double))        -- grid from which to extract
+                    -> Exp Int                              -- oversampling factor
+                    -> Exp Int                              -- size of section
+                    -> Acc (Array DIM4 (Complex Double))    -- Return the oversampled kernels with shape qpx x qpx x n x n
+extract_oversampled a qpx n =
+    let 
+        -- In contrast to the python code, we return all the oversampled kernels at once, instead of one at a time
+        na = (indexHead . shape) a
+        cons = (na `div` 2) - qpx * (n `div` 2)
+        m x = cons - x
+
+        news = lift (Z :. qpx :. qpx :. n :. n) :: Exp DIM4
+        indexer (unlift -> Z :. yf :. xf :. y :. x :: Z :. Exp Int :. Exp Int :. Exp Int :. Exp Int)
+            =  let newy = m yf + qpx * y
+                   newx = m xf + qpx * x
+               in index2 newy newx 
+
+        w_kern = backpermute news indexer a
+        qpx2 = fromIntegral (qpx * qpx)
+    in map (*qpx2) w_kern
 
 ----------------------
 -- Fourier transformations
@@ -399,3 +461,17 @@ myfor n f x | n P.== 0  = x
 
 liftTupf :: (Elt a, Elt b) => (Exp a -> Exp a) -> (Exp b -> Exp b) -> Exp (a,b) -> Exp (a,b)
 liftTupf f g (unlift -> (a, b)) = lift (f a, g b)
+
+--Maybe backpermute could be used aswel, but we need source values
+padder :: Elt a => Acc (Matrix a) -> Exp (Int, Int) -> Exp (Int, Int) -> Exp a ->  Acc (Matrix a)
+padder array pad_width_x pad_width_y constant_val =
+    let
+        (x0, x1) = unlift pad_width_x :: (Exp Int, Exp Int)
+        (y0, y1) = unlift pad_width_x :: (Exp Int, Exp Int)
+        Z :. m :. n = (unlift . shape) array :: ( Z :. Exp Int :. Exp Int)
+        def = fill (index2 (m + y0 + y1) (n + x0 + x1)) constant_val
+
+        indexer (unlift -> Z :. y :. x :: Z :. Exp Int :. Exp Int) 
+            = index2 (y + y0) (x + x0)
+        result = permute const def indexer array
+    in result
