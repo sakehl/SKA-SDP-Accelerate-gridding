@@ -391,7 +391,7 @@ w_kernel_function :: Acc (Matrix Double)              -- Horizontal image coordi
                   -> Exp Double                       -- Baseline distance to the projection plane
                   -> Acc (Matrix (Complex Double))    --N x N array with the far field
 w_kernel_function l m w = 
-    let r2 = zipWith (\x y -> x**x + y*y) l m
+    let r2 = zipWith (\x y -> x*x + y*y) l m
     {-  dl and dm seem to be always zero anyway in the reference code
         dl = 0
         dm = 0

@@ -61,24 +61,25 @@ testWCache :: IO ()
 testWCache = do
     testData <- testData0
     let n   = (P.length . P.fst) testData
-        m   = (P.length . P.snd) testData
-        size = assert (n P.== m) $ Z :. n
+        n2   = (P.length . P.snd) testData
+        size = assert (n P.== n2) $ Z :. n
         vis = fromList size $ P.fst testData
         uvw = fromList size $ P.snd testData
         src      = undefined
         theta    = 2*0.05
         lam      = 18000
-        kwargs   = noArgs {wstep= Just 2000, qpx= Just 1, npixFF= Just 256, npixKern= Just 1}
+        kwargs   = noArgs {wstep= Just 2000, qpx= Just 1, npixFF= Just 256, npixKern= Just 31}
         otargs   = noOtherArgs
         (d,p, _) = CPU.run $ do_imaging theta lam uvw src vis w_cache_imaging kwargs otargs
-        (muvw, mvis) = unzip $ mirror_uvw (use uvw) (use vis)
+        convKern = CPU.run $ w_kernel (constant theta) (constant 6000) kwargs
+    
 
         fst i j = indexArray d (Z :. i :. j)
         maxi = P.maximum (toList d)
     --P.writeFile "data/mirror_uvw.csv" (makeVFile (showTriple $ printf "%e") (CPU.run muvw))
     --P.writeFile "data/result.csv" (makeMFile (printf "%e") d)
     --P.writeFile "data/result_p.csv" (makeMFile (printf "%e") p)
-    P.putStrLn (P.show maxi)
+    P.putStrLn (P.show ((convKern)))
 
 instance (P.Ord a) => P.Ord (Complex a)
     where
