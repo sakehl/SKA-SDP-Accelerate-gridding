@@ -18,7 +18,7 @@ import Data.Array.Accelerate.Interpreter                  as I
 import Gridding
 
 import qualified Prelude as P
-import Prelude as P (fromIntegral, fromInteger, fromRational, String, return, (>>=), (>>), IO)
+import Prelude as P (fromIntegral, fromInteger, fromRational, String, return, (>>=), (>>), IO, Maybe(..))
 import Data.Char (isSpace)
 import Text.Printf
 import Data.List (intercalate)
@@ -30,7 +30,7 @@ import Control.Exception (assert)
 import Control.Lens as L (_1, _2)
 
 main :: IO ()
-main = testSimple
+main = testWCache
 
 ----------------------
 -- I/O things (for testing)
@@ -46,7 +46,8 @@ testSimple = do
         theta    = 2*0.05
         lam      = 18000
         kwargs   = undefined
-        (d,p, _) = CPU.run $ do_imaging theta lam uvw src vis simple_imaging kwargs
+        otargs   = undefined
+        (d,p, _) = CPU.run $ do_imaging theta lam uvw src vis simple_imaging kwargs otargs
         (muvw, mvis) = unzip $ mirror_uvw (use uvw) (use vis)
 
         fst i j = indexArray d (Z :. i :. j)
@@ -55,6 +56,29 @@ testSimple = do
     P.writeFile "data/result.csv" (makeMFile (printf "%e") d)
     P.writeFile "data/result_p.csv" (makeMFile (printf "%e") p)
     -- P.putStrLn (P.show maxi)
+
+testWCache :: IO ()
+testWCache = do
+    testData <- testData0
+    let n   = (P.length . P.fst) testData
+        m   = (P.length . P.snd) testData
+        size = assert (n P.== m) $ Z :. n
+        vis = fromList size $ P.fst testData
+        uvw = fromList size $ P.snd testData
+        src      = undefined
+        theta    = 2*0.05
+        lam      = 18000
+        kwargs   = noArgs {wstep= Just 2000, qpx= Just 1, npixFF= Just 256, npixKern= Just 1}
+        otargs   = noOtherArgs
+        (d,p, _) = CPU.run $ do_imaging theta lam uvw src vis w_cache_imaging kwargs otargs
+        (muvw, mvis) = unzip $ mirror_uvw (use uvw) (use vis)
+
+        fst i j = indexArray d (Z :. i :. j)
+        maxi = P.maximum (toList d)
+    --P.writeFile "data/mirror_uvw.csv" (makeVFile (showTriple $ printf "%e") (CPU.run muvw))
+    --P.writeFile "data/result.csv" (makeMFile (printf "%e") d)
+    --P.writeFile "data/result_p.csv" (makeMFile (printf "%e") p)
+    P.putStrLn (P.show maxi)
 
 instance (P.Ord a) => P.Ord (Complex a)
     where
@@ -126,7 +150,10 @@ parseTuple3 s =
     in (P.read x, P.read y, P.read z)
 
 testing :: Acc (Vector Int)
-testing = use $ fromList (Z :. 5) [0..]
+testing = use $ fromList (Z :. 3) [0..]
+
+testingM :: Acc (Matrix Int)
+testingM = use $ fromList (Z :. 3 :. 3) [0..]
 
 reptesting :: Acc (Array DIM3 Int)
 reptesting = replicate (constant (Z :. All :. (3::Int) :. (3:: Int))) $ testing
@@ -231,3 +258,22 @@ shiftTest xs = let
         True  -> (v, x + mw)
         False -> (v, x -mw2)
     in P.map indexer temp
+
+
+padTest :: Acc (Matrix Int)
+padTest = padder testingM diml diml 0
+        where
+            dim = (1,1) ::  (Exp Int, Exp Int)
+            diml = lift dim
+
+testingCon :: Acc (Matrix Int)
+testingCon = concatOn _2 m1 m2
+    where
+        m1 = use $ fromList (Z :. 1 :. 5) [0..]
+        m2 = use $ fromList (Z :. 1 :. 5) [5..]
+
+
+thekernelsTest :: Acc (Matrix Int)
+thekernelsTest = let cpusteps = 16
+                     makeWKernel i = use $ fromList (Z :. 1 :. 2) [i, i]
+    in myfor (cpusteps - 1) (\i old -> concatOn _2 (makeWKernel i) old) (makeWKernel (cpusteps - 1))
