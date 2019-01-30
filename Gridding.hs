@@ -19,9 +19,10 @@ import qualified Prelude as P
 import Prelude as P (fromIntegral, fromInteger, fromRational, String, return, (>>=), (>>), IO, Maybe(..), maybe)
 
 import Control.Lens as L (_1, _2, _3, _4, _5)
-
 import Data.Maybe (fromJust, fromMaybe)
-import Data.Function.Memoize
+--import Data.Function.Memoize
+import System.IO.Unsafe (unsafePerformIO)
+import Debug.Trace
 
 data Kwargs = Kwargs { patHorShift :: Maybe Int
                      , patVerShift :: Maybe Int
@@ -146,17 +147,27 @@ convgrid dims gcf a p v =
         coords = frac_coords (lift (height, width)) (constant qpx) p
         halfgh = constant $ gh `div` 2
         halfgw = constant $ gw `div` 2
+        cgh = constant gh
+        cgw = constant gw
 
         getComplex :: Int -> Int -> Exp (Int, Int, Int, Int) -> Exp (Int, Int, Complex Double)
         getComplex i j (unlift -> (x, xf, y, yf)::(Exp Int,Exp Int,Exp Int,Exp Int)) =
             lift ( x
                  , y
                  , gcf ! lift (Z :. yf :. xf :. constant i :. constant j) )
+                 
         fullrepli :: Int -> Int -> Acc (Matrix (Complex Double)) -> Acc (Matrix (Complex Double))
         fullrepli i j origin = 
-            let temp = map (getComplex i j) coords
-                (x, y, source) = unzip3 temp
-                indexer id = lift (Z :. y ! id - halfgh + constant i :. x ! id - halfgw + constant j)
+            let offsety = constant i - halfgh
+                offsetx = constant j - halfgw
+                complex0 = lift (constant 0 :+ constant 0) :: Exp (Complex Double)
+                addsource = map (getComplex i j) coords
+                checkbounds = map (fixoutofbounds offsetx offsety width height complex0) addsource
+                (x, y, source) = unzip3 $ checkbounds
+                indexer id = 
+                    let y' = y ! id + offsety
+                        x' = x ! id + offsetx
+                    in lift (Z :. y' :. x')
                 newV = zipWith (*) source v
             in permute (+) origin indexer newV
         
@@ -272,7 +283,7 @@ do_imaging theta lam uvw src vis imgfn kwargs otargs =
         drt = (map real . ifft . make_grid_hermitian) cdrt
         -- Make point spread function
         c = imgfn theta lam uvw1 src0 wt kwargs otargs
-        psf = (map real . ifft . make_grid_hermitian) c
+        psf =  (map real . ifft . make_grid_hermitian) c
         -- Normalise
         pmaxv = (maximum . flatten) psf
         pmax = the pmaxv
@@ -565,4 +576,24 @@ padder array pad_width_x pad_width_y constant_val =
         result = permute const def indexer array
     in result
 
+c0 :: Exp Int
+c0 = constant 0
 
+addMessage :: String -> a -> a
+addMessage mes action = 
+    let io = unsafePerformIO (P.putStrLn mes)
+    in P.seq action (P.seq io action)
+
+-- Check if the offset sets something out of bounds
+fixoutofbounds ::Elt a => Exp Int -> Exp Int -> Exp Int -> Exp Int -> Exp a -> Exp (Int, Int, a) -> Exp (Int, Int, a)
+fixoutofbounds offsetx offsety maxx maxy def 
+                old@(unlift -> (x', y', _) ::(Exp Int,Exp Int,Exp a)) = 
+    let idx = x' + offsetx
+        idy = y' + offsety
+        outofbounds = idx < c0 || idy < c0 || idx >= maxx || idy >= maxy
+        -- If out of bounds, set all values to zero (after the offset alters it)
+        newx = - offsetx :: Exp Int
+        newy = - offsety :: Exp Int
+        newv = def
+        new = lift (newx, newy, newv)
+    in if outofbounds then new else old

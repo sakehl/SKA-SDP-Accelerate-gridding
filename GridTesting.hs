@@ -27,10 +27,10 @@ import Debug.Trace
 import System.IO.Unsafe (unsafePerformIO)
 import Control.Exception (assert)
 
-import Control.Lens as L (_1, _2)
+import Control.Lens as L (_1, _2, (^.) )
 
 main :: IO ()
-main = testWCache
+main = testConv
 
 ----------------------
 -- I/O things (for testing)
@@ -47,15 +47,18 @@ testSimple = do
         lam      = 18000
         kwargs   = undefined
         otargs   = undefined
-        (d,p, _) = CPU.run $ do_imaging theta lam uvw src vis simple_imaging kwargs otargs
+        thecode = do_imaging theta lam uvw src vis simple_imaging kwargs otargs
+        (d,p, _) = CPU.run $ thecode
         (muvw, mvis) = unzip $ mirror_uvw (use uvw) (use vis)
 
         fst i j = indexArray d (Z :. i :. j)
         maxi = P.maximum (toList d)
-    P.writeFile "data/mirror_uvw.csv" (makeVFile (showTriple $ printf "%e") (CPU.run muvw))
-    P.writeFile "data/result.csv" (makeMFile (printf "%e") d)
-    P.writeFile "data/result_p.csv" (makeMFile (printf "%e") p)
-    -- P.putStrLn (P.show maxi)
+        maxi2 = (CPU.run . maximum . flatten . (^. _1) ) (unlift thecode :: (Acc (Matrix Double), Acc (Matrix Double), Acc (Scalar Double)))
+    --P.writeFile "data/mirror_uvw.csv" (makeVFile (showTriple $ printf "%e") (CPU.run muvw))
+    --P.writeFile "data/result.csv" (makeMFile (printf "%e") d)
+    --P.writeFile "data/result_p.csv" (makeMFile (printf "%e") p)
+    --P.writeFile ("data/generated_simple.hs") (P.show thecode)
+    P.putStrLn (P.show maxi2)
 
 testWCache :: IO ()
 testWCache = do
@@ -68,14 +71,14 @@ testWCache = do
         src      = undefined
         theta    = 2*0.05
         lam      = 18000
-        qpx      = 3
-        w        = 6000
-        npixFF   = 256
-        npixKern = 32
+        qpx      = 2
+        w        = 1000
+        npixFF   = 16
+        npixKern = 4
         kwargs   = noArgs {wstep= Just w, qpx= Just qpx, npixFF= Just npixFF, npixKern= Just npixKern}
         otargs   = noOtherArgs
         (d,p, _) = CPU.run $ do_imaging theta lam uvw src vis w_cache_imaging kwargs otargs
-        convKern = CPU.run $ w_kernel (constant theta) (constant 6000) kwargs
+        convKern = CPU.run $ w_kernel (constant theta) (constant (fromIntegral w)) kwargs
         convKern' = arrayReshape (Z :. (arraySize . arrayShape ) convKern ) convKern
 
         (l, m) = unlift $ kernel_coordinates (constant 256) (constant theta) kwargs :: (Acc (Matrix Double), Acc (Matrix Double))
@@ -88,11 +91,48 @@ testWCache = do
     --P.writeFile "data/mirror_uvw.csv" (makeVFile (showTriple $ printf "%e") (CPU.run muvw))
     --P.writeFile "data/result.csv" (makeMFile (printf "%e") d)
     --P.writeFile "data/result_p.csv" (makeMFile (printf "%e") p)
-    --P.putStrLn (P.show ((maxi)))
-    P.writeFile "data/result_conv.csv" (makeVFile (showC) convKern')
+    P.putStrLn (P.show ((maxi)))
+    --P.writeFile "data/result_conv.csv" (makeVFile (showC) convKern')
     --P.writeFile "data/result_kern.csv" (makeMFile (showC) kern)
     --P.writeFile "data/result_af.csv" (makeMFile (showC) (CPU.run af))
-    P.putStrLn (P.show ((convKern `indexArray` (Z :. 0 :. 0 :. 0 :. 0) )))
+    --P.putStrLn (P.show ((convKern `indexArray` (Z :. 0 :. 0 :. 0 :. 0) )))
+
+testConv :: IO ()
+testConv = do
+    testData <- testData0
+    let n   = (P.length . P.fst) testData
+        n2   = (P.length . P.snd) testData
+        size = assert (n P.== n2) $ Z :. n
+        vis = fromList size $ P.fst testData
+        uvw = fromList size $ P.snd testData
+        src      = undefined
+        theta    = 2*0.005
+        lam      = 18000
+        lamf     = fromIntegral lam
+        qpx      = 1
+        w        = 1000
+        npixFF   = 16
+        npixKern = 1
+        ne = constant $ P.round(theta * lamf) :: Exp Int
+        convKern = CPU.run $ w_kernel (constant theta) (constant (fromIntegral w)) kwargs
+        convKern' = CPU.run $ flatten (use convKern)
+        kwargs   = noArgs {wstep= Just w, qpx= Just qpx, npixFF= Just npixFF, npixKern= Just npixKern}
+        otargs   = noOtherArgs {convolutionKernel = Just convKern}
+        (d,p, pmax) = CPU.run $ do_imaging theta lam uvw src vis conv_imaging kwargs otargs
+
+        (height, width) = (ne,ne)
+        pp = map (`div3` constant lamf) (use uvw)
+        coords = frac_coords (lift (height, width)) (constant qpx) pp
+
+        maxi = P.maximum (toList d)
+    --P.writeFile "data/mirror_uvw.csv" (makeVFile (showTriple $ printf "%e") (CPU.run muvw))
+    --P.writeFile "data/result.csv" (makeMFile (printf "%e") d)
+    P.writeFile "data/result_coords.csv" (makeVFile (showQuad P.show) (CPU.run coords))
+    P.writeFile "data/result_kern.csv" (makeVFile (showC) convKern')
+    P.writeFile "data/result_p.csv" (makeMFile (printf "%e") p)
+    P.writeFile "data/result.csv" (makeMFile (printf "%e") d)
+    --P.putStrLn (P.show ((maxi)))
+    P.putStrLn (P.show ((pmax)))
 
 instance (P.Ord a) => P.Ord (Complex a)
     where
@@ -130,6 +170,9 @@ showC (x :+ y) | y P.>= 0 = '(' : printf "%e" x P.++ '+' : printf "%e" y P.++ "j
 
 showTriple :: (a -> String) -> (a,a,a) -> String
 showTriple print (x,y,z) = (intercalate ",") $ print x : print y : print z : []
+
+showQuad :: (a -> String) -> (a,a,a,a) -> String
+showQuad print (w,x,y,z) = (intercalate ",") $ print w : print x : print y : print z : []
 -------------------------
 -- Test input reading
 testData0 :: IO ([Complex Double], [(Double, Double, Double)])
@@ -291,3 +334,25 @@ thekernelsTest :: Acc (Matrix Int)
 thekernelsTest = let cpusteps = 16
                      makeWKernel i = use $ fromList (Z :. 1 :. 2) [i, i]
     in myfor (cpusteps - 1) (\i old -> concatOn _2 (makeWKernel i) old) (makeWKernel (cpusteps - 1))
+
+testFixbounds :: Acc (Matrix Int)-- Acc (Vector (Int, Int, Int))
+testFixbounds = 
+    let 
+        v1 = use $ fromList (Z :. 5) [(x,x,x+5) | x <- [0..] ]
+        offsety = constant $ 1 :: Exp Int
+        offsetx = constant $ 0 :: Exp Int
+        width = constant 5 :: Exp Int
+        height = constant 5 :: Exp Int
+
+        origin = fill (index2 height width) c0 
+
+        f = fixoutofbounds offsetx offsety width height c0
+        checkbounds = map f v1
+        (x, y, source) = unzip3 $ checkbounds :: (Acc (Vector Int), Acc (Vector Int), Acc (Vector Int))
+        indexer id = 
+            let y' = y ! id + offsety
+                x' = x ! id + offsetx
+            in lift (Z :. y' :. x')
+
+        
+    in permute (+) origin indexer source
