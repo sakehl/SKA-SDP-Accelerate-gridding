@@ -37,7 +37,6 @@ data Kwargs = Kwargs { patHorShift :: Maybe Int
 data OtherImagingArgs = OtherImagingArgs 
                       { convolutionKernel :: Maybe ((Array DIM4 (Complex Double)))
                       , kernelCache :: Maybe KernelF
-                      -- TODO: Make good type for kernel_fn
                       , kernelFunction :: Maybe KernelF
                       }
 
@@ -361,7 +360,7 @@ kernel_coordinates n theta kwargs =
     let
         dl = (constant . fromIntegral . fromMaybe 0 . patHorShift) kwargs
         dm = (constant . fromIntegral . fromMaybe 0 . patVerShift) kwargs
-        (l,m) = unlift $ coordinates2 (n) :: (Acc (Matrix Double), Acc (Matrix Double))-- * theta 
+        (l,m) = unlift $ coordinates2 n :: (Acc (Matrix Double), Acc (Matrix Double)) 
         lm1 = map (liftTupf (*theta) (*theta)) (zip l m)
         lm2 = case patTransMat kwargs of
             Nothing -> lm1
@@ -423,7 +422,7 @@ pad_mid ff n =
     let
         Z :. n0 :. n0w = (unlift . shape) ff :: Z :. Exp Int :. Exp Int
         result = if n == n0 then ff else padded
-        pad_width = lift ((n `div` 2)-(n0 `div` 2), (n+1 `div` 2)-(n0+1 `div` 2))
+        pad_width = lift ((n `div` 2)-(n0 `div` 2), ((n+1) `div` 2)-((n0+1) `div` 2))
         padded = padder ff pad_width pad_width 0
     in result
 

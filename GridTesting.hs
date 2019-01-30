@@ -68,18 +68,31 @@ testWCache = do
         src      = undefined
         theta    = 2*0.05
         lam      = 18000
-        kwargs   = noArgs {wstep= Just 2000, qpx= Just 1, npixFF= Just 256, npixKern= Just 31}
+        qpx      = 3
+        w        = 6000
+        npixFF   = 256
+        npixKern = 32
+        kwargs   = noArgs {wstep= Just w, qpx= Just qpx, npixFF= Just npixFF, npixKern= Just npixKern}
         otargs   = noOtherArgs
         (d,p, _) = CPU.run $ do_imaging theta lam uvw src vis w_cache_imaging kwargs otargs
         convKern = CPU.run $ w_kernel (constant theta) (constant 6000) kwargs
-    
+        convKern' = arrayReshape (Z :. (arraySize . arrayShape ) convKern ) convKern
+
+        (l, m) = unlift $ kernel_coordinates (constant 256) (constant theta) kwargs :: (Acc (Matrix Double), Acc (Matrix Double))
+        kern = w_kernel_function l m (constant (fromIntegral w))
+        padff = pad_mid kern (constant npixFF * constant qpx)
+        af = ifft padff
 
         fst i j = indexArray d (Z :. i :. j)
         maxi = P.maximum (toList d)
     --P.writeFile "data/mirror_uvw.csv" (makeVFile (showTriple $ printf "%e") (CPU.run muvw))
     --P.writeFile "data/result.csv" (makeMFile (printf "%e") d)
     --P.writeFile "data/result_p.csv" (makeMFile (printf "%e") p)
-    P.putStrLn (P.show ((convKern)))
+    --P.putStrLn (P.show ((maxi)))
+    P.writeFile "data/result_conv.csv" (makeVFile (showC) convKern')
+    --P.writeFile "data/result_kern.csv" (makeMFile (showC) kern)
+    --P.writeFile "data/result_af.csv" (makeMFile (showC) (CPU.run af))
+    P.putStrLn (P.show ((convKern `indexArray` (Z :. 0 :. 0 :. 0 :. 0) )))
 
 instance (P.Ord a) => P.Ord (Complex a)
     where
