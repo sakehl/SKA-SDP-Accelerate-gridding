@@ -109,10 +109,10 @@ testConv = do
         theta    = 2*0.005
         lam      = 18000
         lamf     = fromIntegral lam
-        qpx      = 1
+        qpx      = 2
         w        = 1000
-        npixFF   = 16
-        npixKern = 1
+        npixFF   = 256
+        npixKern = 31
         ne = constant $ P.round(theta * lamf) :: Exp Int
         convKern = CPU.run $ w_kernel (constant theta) (constant (fromIntegral w)) kwargs
         convKern' = CPU.run $ flatten (use convKern)
@@ -120,19 +120,17 @@ testConv = do
         otargs   = noOtherArgs {convolutionKernel = Just convKern}
         (d,p, pmax) = CPU.run $ do_imaging theta lam uvw src vis conv_imaging kwargs otargs
 
-        (height, width) = (ne,ne)
-        pp = map (`div3` constant lamf) (use uvw)
-        coords = frac_coords (lift (height, width)) (constant qpx) pp
+        maxi = CPU.run $ (maximum . flatten ) (use d)
 
-        maxi = P.maximum (toList d)
+
+        --maxi = P.maximum (toList d)
     --P.writeFile "data/mirror_uvw.csv" (makeVFile (showTriple $ printf "%e") (CPU.run muvw))
     --P.writeFile "data/result.csv" (makeMFile (printf "%e") d)
-    P.writeFile "data/result_coords.csv" (makeVFile (showQuad P.show) (CPU.run coords))
+    --P.writeFile "data/result_coords.csv" (makeVFile (showQuad P.show) (CPU.run coords))
     P.writeFile "data/result_kern.csv" (makeVFile (showC) convKern')
-    P.writeFile "data/result_p.csv" (makeMFile (printf "%e") p)
+    --P.writeFile "data/result_p.csv" (makeMFile (printf "%e") p)
     P.writeFile "data/result.csv" (makeMFile (printf "%e") d)
-    --P.putStrLn (P.show ((maxi)))
-    P.putStrLn (P.show ((pmax)))
+    P.putStrLn (P.show ((maxi)))
 
 instance (P.Ord a) => P.Ord (Complex a)
     where
@@ -335,24 +333,79 @@ thekernelsTest = let cpusteps = 16
                      makeWKernel i = use $ fromList (Z :. 1 :. 2) [i, i]
     in myfor (cpusteps - 1) (\i old -> concatOn _2 (makeWKernel i) old) (makeWKernel (cpusteps - 1))
 
-testFixbounds :: Acc (Matrix Int)-- Acc (Vector (Int, Int, Int))
+testFixbounds :: Acc (Matrix (Complex Double))-- Acc (Vector (Int, Int, Int))
 testFixbounds = 
     let 
-        v1 = use $ fromList (Z :. 5) [(x,x,x+5) | x <- [0..] ]
-        offsety = constant $ 1 :: Exp Int
-        offsetx = constant $ 0 :: Exp Int
+        v1 ::  Acc (Vector (Int, Int, Complex Double))
+        v1 = use $ fromList (Z :. 10) [((2 * x)  `P.mod` 5 ,(3 * x + 1) `P.mod` 5, ( (fromIntegral $ x+5) :+ 1.0)) | x <- [0..] ]
         width = constant 5 :: Exp Int
         height = constant 5 :: Exp Int
+        cc0 = (lift (constant 0.0 :+ constant 0.0))
+        a = fill (index2 height width) cc0
 
-        origin = fill (index2 height width) c0 
+        fullrepli i j origin = 
+            let 
+                offsety = constant $ i :: Exp Int
+                offsetx = constant $ j :: Exp Int
+                f = fixoutofboundsOLD offsetx offsety width height cc0
+                checkbounds = map f v1
+                (x, y, source) = unzip3 $ checkbounds :: (Acc (Vector Int), Acc (Vector Int), Acc (Vector (Complex Double)))
+                indexer id = 
+                    let y' = y ! id + offsety
+                        x' = x ! id + offsetx
+                    in lift (Z :. y' :. x')
+            in permute (+) origin indexer source
+    in fullrepli 0 1 $fullrepli 1 0 $ fullrepli 1 1 $ fullrepli 0 0 a
 
-        f = fixoutofbounds offsetx offsety width height c0
-        checkbounds = map f v1
-        (x, y, source) = unzip3 $ checkbounds :: (Acc (Vector Int), Acc (Vector Int), Acc (Vector Int))
-        indexer id = 
-            let y' = y ! id + offsety
-                x' = x ! id + offsetx
-            in lift (Z :. y' :. x')
+testFixbounds2 :: Acc (Matrix (Complex Double))-- Acc (Vector (Int, Int, Int))
+testFixbounds2 = 
+    let 
+        v1 ::  Acc (Vector (Int, Int, Int, Int, Complex Double))
+        v1 = use $ fromList (Z :. 10) 
+            [((2 * x)  `P.mod` 5
+            , x `P.mod` 2
+            ,(3 * x + 2) `P.mod` 5
+            , x `P.mod` 2
+            , ( (fromIntegral $ x+5) :+ 1.0)) 
+                | x <- [0..] ]
+        width = constant 5 :: Exp Int
+        height = constant 5 :: Exp Int
+        cc0 = (lift (constant 0.0 :+ constant 0.0))
+        a = fill (index2 height width) cc0
+
+        fixer = fixoutofbounds width height cc0
+
+        gcf = use $ fromList (Z :. 2 :. 2 :. 2 :. 2) [ x :+ x | x <- [0..] ] :: Acc (Array DIM4 (Complex Double) )
+
+        getComplex :: Exp DIM3 -> Exp (Int, Int, Int, Int, Complex Double) -> Exp (Int, Int, Complex Double)
+        getComplex 
+            (unlift . unindex3 -> (_, i, j) ::(Exp Int,Exp Int,Exp Int))
+            (unlift -> (x, xf, y, yf, vis)::(Exp Int,Exp Int,Exp Int,Exp Int,Exp (Complex Double))) =
+            lift ( x + j
+                 , y + i
+                 , vis * gcf ! lift (Z :. yf :. xf :. i :. j) )
 
         
-    in permute (+) origin indexer source
+        totv1 = replicate (constant (Z :. All :. (2 :: Int) :. (2 :: Int))) v1
+        withkern = imap getComplex totv1
+        (x,y, val) = unzip3 $ map fixer withkern
+
+        indexer id =
+            let y' = y ! id
+                x' = x ! id  
+            in index2 y' x'
+    in permute (+) a indexer val
+
+
+fixoutofboundsOLD ::Elt a => Exp Int -> Exp Int -> Exp Int -> Exp Int -> Exp a -> Exp (Int, Int, a) -> Exp (Int, Int, a)
+fixoutofboundsOLD offsetx offsety maxx maxy def 
+                old@(unlift -> (x', y', _) ::(Exp Int,Exp Int,Exp a)) = 
+    let idx = x' + offsetx
+        idy = y' + offsety
+        outofbounds = idx < c0 || idy < c0 || idx >= maxx || idy >= maxy
+        -- If out of bounds, set all values to zero (after the offset alters it)
+        newx = - offsetx :: Exp Int
+        newy = - offsety :: Exp Int
+        newv = def
+        new = lift (newx, newy, newv)
+    in if outofbounds then new else old

@@ -140,38 +140,47 @@ convgrid :: DIM4                                     -- The dimensions of the co
          -> Acc (Vector (Double, Double, Double))    -- The uvw baselines, but between -.5 and .5
          -> Acc (Vector (Complex Double))            -- The visiblities
          -> Acc (Matrix (Complex Double))
-convgrid dims gcf a p v =
-    let -- Z :. qpx :. _ :. gh :. gw = unlift (shape gcf) :: Z :. Int :. Int :. Int :. Int
-        Z :. qpx :. _ :.  gh :. gw = dims
+convgrid _ gcf a p v =
+    let Z :. qpx :. _ :. gh :. gw = unlift (shape gcf) :: Z :. Exp Int :. Exp Int :. Exp Int :. Exp Int
+        --Z :. qpx :. _ :.  gh :. gw = dims
         Z :. height :. width = unlift (shape a) :: Z :. Exp Int :. Exp Int
-        coords = frac_coords (lift (height, width)) (constant qpx) p
-        halfgh = constant $ gh `div` 2
-        halfgw = constant $ gw `div` 2
-        cgh = constant gh
-        cgw = constant gw
+        halfgh = gh `div` 2
+        halfgw = gw `div` 2
+        cc0 = (lift (constant 0.0 :+ constant 0.0))
 
-        getComplex :: Int -> Int -> Exp (Int, Int, Int, Int) -> Exp (Int, Int, Complex Double)
-        getComplex i j (unlift -> (x, xf, y, yf)::(Exp Int,Exp Int,Exp Int,Exp Int)) =
-            lift ( x
-                 , y
-                 , gcf ! lift (Z :. yf :. xf :. constant i :. constant j) )
-                 
-        fullrepli :: Int -> Int -> Acc (Matrix (Complex Double)) -> Acc (Matrix (Complex Double))
-        fullrepli i j origin = 
-            let offsety = constant i - halfgh
-                offsetx = constant j - halfgw
-                complex0 = lift (constant 0 :+ constant 0) :: Exp (Complex Double)
-                addsource = map (getComplex i j) coords
-                checkbounds = map (fixoutofbounds offsetx offsety width height complex0) addsource
-                (x, y, source) = unzip3 $ checkbounds
-                indexer id = 
-                    let y' = y ! id + offsety
-                        x' = x ! id + offsetx
-                    in lift (Z :. y' :. x')
-                newV = zipWith (*) source v
-            in permute (+) origin indexer newV
-        
-    in myfor gh (\i -> myfor gw (fullrepli i)) a
+        coords = frac_coords (lift (height, width)) qpx p
+        (cx, cxf, cy, cyf) = unzip4 coords
+
+        -- Shift the x and y -0.5*gw and -0.5*gh
+        -- From here on the convolution kernel maps to the destination grid
+        newcx = map (\x -> x - halfgw) cx
+        newcy = map (\y -> y - halfgh) cy
+        coordsAndVis = zip5 newcx cxf newcy cyf v
+        -- We replicate gh * gw times, because each visibility is added is added to so many points,
+        -- centered around the orignal x and y
+        coordsAndVisRep = replicate (lift (Z :. All :. gh  :. gw)) coordsAndVis
+
+        -- Add the correct offset, and multiply vis with the kernel
+        withkern = imap getComplexAndAddOffset coordsAndVisRep
+        -- Fix values that are now set out of bounds
+        fixedBounds = map fixer withkern
+        (x,y, val) = unzip3 fixedBounds
+
+        fixer = fixoutofbounds width height cc0
+
+        indexer id =
+            let y' = y ! id
+                x' = x ! id
+            in index2 y' x'
+
+        getComplexAndAddOffset :: Exp DIM3 -> Exp (Int, Int, Int, Int, Complex Double) -> Exp (Int, Int, Complex Double)
+        getComplexAndAddOffset 
+            (unlift . unindex3 -> (_, i, j) ::(Exp Int,Exp Int,Exp Int))
+            (unlift -> (x, xf, y, yf, vis)::(Exp Int,Exp Int,Exp Int,Exp Int,Exp (Complex Double))) =
+            lift ( x + j
+                 , y + i
+                 , vis * gcf ! lift (Z :. yf :. xf :. i :. j) )
+    in permute (+) a indexer val
 
 convgrid2 :: DIM4                                     -- The dimensions of the convolution kernel (extra argument compared to ref code)
           -- -> Acc (Array DIM4 (Complex Double))     -- The oversampled convolution kernel
@@ -585,15 +594,12 @@ addMessage mes action =
     in P.seq action (P.seq io action)
 
 -- Check if the offset sets something out of bounds
-fixoutofbounds ::Elt a => Exp Int -> Exp Int -> Exp Int -> Exp Int -> Exp a -> Exp (Int, Int, a) -> Exp (Int, Int, a)
-fixoutofbounds offsetx offsety maxx maxy def 
+fixoutofbounds :: Elt a => Exp Int -> Exp Int -> Exp a -> Exp (Int, Int, a) -> Exp (Int, Int, a)
+fixoutofbounds maxx maxy defv
                 old@(unlift -> (x', y', _) ::(Exp Int,Exp Int,Exp a)) = 
-    let idx = x' + offsetx
-        idy = y' + offsety
-        outofbounds = idx < c0 || idy < c0 || idx >= maxx || idy >= maxy
+    let outofbounds = x' < c0 || y' < c0 || x' >= maxx || y' >= maxy
         -- If out of bounds, set all values to zero (after the offset alters it)
-        newx = - offsetx :: Exp Int
-        newy = - offsety :: Exp Int
-        newv = def
-        new = lift (newx, newy, newv)
-    in if outofbounds then new else old
+        defx = c0 :: Exp Int
+        defy = c0 :: Exp Int
+        def = lift (defx, defy, defv)
+    in if outofbounds then def else old
