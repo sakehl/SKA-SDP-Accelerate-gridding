@@ -31,8 +31,6 @@ data Kwargs = Kwargs { patHorShift :: Maybe Int
                      , qpx :: Maybe Int              -- The oversampling of the convolution kernel
                      , npixFF :: Maybe Int
                      , npixKern :: Maybe Int         -- Kernel size (if it is same size in x and y)
-                     , npixKernx :: Maybe Int        -- Kernel x dimension
-                     , npixKerny :: Maybe Int        -- Kernel y dimension
                      }
 
 data OtherImagingArgs = OtherImagingArgs 
@@ -47,7 +45,7 @@ type KernelF = Exp Double                              -- Field of view
              -> Acc (Array DIM4 (Complex Double))    -- [Qpx,Qpx,s,s] shaped oversampled convolution kernels
 
 noArgs :: Kwargs
-noArgs = Kwargs Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+noArgs = Kwargs Nothing Nothing Nothing Nothing Nothing Nothing Nothing
 
 noOtherArgs :: OtherImagingArgs
 noOtherArgs = OtherImagingArgs Nothing Nothing Nothing
@@ -97,7 +95,6 @@ grid a p v = permute (+) a (\i -> xy ! i) v
 conv_imaging :: ImagingFunction
 conv_imaging theta lam uvw src vis kwargs otargs =
     let kv = fromJust $ convolutionKernel otargs
-        dims = arrayShape kv
         lamf = fromIntegral lam
         n = P.round(theta * lamf)
         ne = constant n
@@ -105,7 +102,7 @@ conv_imaging theta lam uvw src vis kwargs otargs =
         p = map (`div3` constant lamf) uvw
         czero = constant 0
         guv = fill (index2 ne ne) czero
-    in convgrid dims (use kv) guv p vis
+    in convgrid (use kv) guv p vis
 
 frac_coord :: Exp Int                                   -- The height/width
            -> Exp Int                                   -- Oversampling factor
@@ -134,15 +131,13 @@ frac_coords (unlift -> (h, w) ) qpx p =
         (y, yf)   = unzip (frac_coord h qpx v)
     in zip4 x xf y yf
 
-convgrid :: DIM4                                     -- The dimensions of the convoltion kernel (extra argument compared to ref code)
-         -> Acc (Array DIM4 (Complex Double))        -- The oversampled convolution kernel
+convgrid :: Acc (Array DIM4 (Complex Double))        -- The oversampled convolution kernel
          -> Acc (Matrix (Complex Double))            -- Destination grid N x N of complex numbers
          -> Acc (Vector (Double, Double, Double))    -- The uvw baselines, but between -.5 and .5
          -> Acc (Vector (Complex Double))            -- The visiblities
          -> Acc (Matrix (Complex Double))
-convgrid _ gcf a p v =
+convgrid gcf a p v =
     let Z :. qpx :. _ :. gh :. gw = unlift (shape gcf) :: Z :. Exp Int :. Exp Int :. Exp Int :. Exp Int
-        --Z :. qpx :. _ :.  gh :. gw = dims
         Z :. height :. width = unlift (shape a) :: Z :. Exp Int :. Exp Int
         halfgh = gh `div` 2
         halfgw = gw `div` 2
@@ -182,43 +177,57 @@ convgrid _ gcf a p v =
                  , vis * gcf ! lift (Z :. yf :. xf :. i :. j) )
     in permute (+) a indexer val
 
-convgrid2 :: DIM4                                     -- The dimensions of the convolution kernel (extra argument compared to ref code)
-          -- -> Acc (Array DIM4 (Complex Double))     -- The oversampled convolution kernel
-          -> Acc (Array DIM5 (Complex Double))        -- The oversampled convolution kernel
+convgrid2 :: Acc (Array DIM5 (Complex Double))        -- The oversampled convolution kernel
           -> Acc (Matrix (Complex Double))            -- Destination grid N x N of complex numbers
           -> Acc (Vector (Double, Double, Double))    -- The uvw baselines, but between -.5 and .5
           -> Acc (Vector Int)                         -- *DIF* The wbin index of the convolution kernel
           -> Acc (Vector (Complex Double))            -- The visiblities
           -> Acc (Matrix (Complex Double))
-convgrid2 dims gcf a p wbin v =
-    let -- Z :. qpx :. _ :. gh :. gw = unlift (shape gcf) :: Z :. Int :. Int :. Int :. Int
-        Z :. qpx :. _ :.  gh :. gw = dims
+convgrid2 gcf a p wbin v =
+    let Z :. _ :. qpx :. _ :. gh :. gw = unlift (shape gcf) :: Z :. Exp Int :. Exp Int :. Exp Int :. Exp Int :. Exp Int
         Z :. height :. width = unlift (shape a) :: Z :. Exp Int :. Exp Int
-        coords = frac_coords (lift (height, width)) (constant qpx) p
-        (x, xf, y, yf) = unzip4 coords
-        coordsW = zip5 wbin x xf y yf
-        halfgh = constant $ gh `div` 2
-        halfgw = constant $ gw `div` 2
+        halfgh = gh `div` 2
+        halfgw = gw `div` 2
+        cc0 = (lift (constant 0.0 :+ constant 0.0))
 
-        getComplex :: Int -> Int -> Exp (Int, Int, Int, Int, Int) -> Exp (Int, Int, Complex Double)
-        getComplex i j (unlift -> (wbin, x, xf, y, yf)::(Exp Int,Exp Int,Exp Int,Exp Int,Exp Int)) =
-            lift ( x
-                 , y
-                 , gcf ! lift (Z :. wbin :. yf :. xf :. constant i :. constant j) )
-        fullrepli :: Int -> Int -> Acc (Matrix (Complex Double)) -> Acc (Matrix (Complex Double))
-        fullrepli i j origin = 
-            let temp = map (getComplex i j) coordsW
-                (x, y, source) = unzip3 temp
-                indexer id = lift (Z :. y ! id - halfgh + constant i :. x ! id - halfgw + constant j)
-                newV = zipWith (*) source v
-            in permute (+) origin indexer newV
+        coords = frac_coords (lift (height, width)) qpx p
+        (cx, cxf, cy, cyf) = unzip4 coords
+
+        -- Shift the x and y -0.5*gw and -0.5*gh
+        -- From here on the convolution kernel maps to the destination grid
+        newcx = map (\x -> x - halfgw) cx
+        newcy = map (\y -> y - halfgh) cy
+        coordsAndVis = zip6 wbin newcx cxf newcy cyf v
+        -- We replicate gh * gw times, because each visibility is added is added to so many points,
+        -- centered around the orignal x and y
+        coordsAndVisRep = replicate (lift (Z :. All :. gh  :. gw)) coordsAndVis
+
+        -- Add the correct offset, and multiply vis with the kernel
+        withkern = imap getComplexAndAddOffset coordsAndVisRep
+        -- Fix values that are now set out of bounds
+        fixedBounds = map fixer withkern
+        (x,y, val) = unzip3 fixedBounds
+
+        fixer = fixoutofbounds width height cc0
+
+        indexer id =
+            let y' = y ! id
+                x' = x ! id
+            in index2 y' x'
         
-    in myfor gh (\i -> myfor gw (fullrepli i)) a
+        getComplexAndAddOffset :: Exp DIM3 -> Exp (Int, Int, Int, Int, Int, Complex Double) -> Exp (Int, Int, Complex Double)
+        getComplexAndAddOffset 
+            (unlift . unindex3 -> (_, i, j) ::(Exp Int,Exp Int,Exp Int))
+            (unlift -> (wbin, x, xf, y, yf, vis)::(Exp Int,Exp Int,Exp Int,Exp Int,Exp Int,Exp (Complex Double))) =
+            lift ( x + j
+                 , y + i
+                 , vis * gcf ! lift (Z :. wbin :. yf :. xf :. i :. j) )        
+    in permute (+) a indexer val
 
 -- Imaging with a w kernel
 w_cache_imaging :: ImagingFunction
 w_cache_imaging theta lam uvw src vis 
- kwargs@Kwargs{wstep = wstep', qpx = qpx', npixKern = npixKern', npixKernx = npixKernx', npixKerny = npixKerny'}
+ kwargs@Kwargs{wstep = wstep', qpx = qpx'}
  otargs@OtherImagingArgs{kernelCache = kernel_cache', kernelFunction = kernel_fn'} =
     let 
         -- They use a LRU cache for the function, to memoize the results. Maybe usefull. Not sure yet.
@@ -227,11 +236,6 @@ w_cache_imaging theta lam uvw src vis
         kernel_fn    = fromMaybe w_kernel kernel_fn'
         kernel_cache = fromMaybe kernel_fn kernel_cache'
         wstep = constant $ fromMaybe 2000 wstep'
-        
-        qpx = fromJust qpx'
-        npixKernx = fromMaybe (fromJust npixKernx') npixKern'
-        npixKerny = fromMaybe (fromJust npixKerny') npixKern'
-        thedim = Z :. qpx :. qpx :. npixKerny :. npixKernx
         
         lamf = fromIntegral lam
         n = P.round(theta * lamf)
@@ -260,7 +264,7 @@ w_cache_imaging theta lam uvw src vis
                      in reshape newsh mat
 
         thekernels = myfor (cpusteps - 1) (\i old -> concatOn _5 (makeWKernel i) old) (makeWKernel (cpusteps - 1))
-    in convgrid2 thedim thekernels guv p wbins vis
+    in convgrid2 thekernels guv p wbins vis
 
 ----------------------------------
 -- Processing the imaging functions
