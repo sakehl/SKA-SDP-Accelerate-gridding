@@ -161,7 +161,7 @@ makeVFileC = makeVFile showC
 
 makeMFileC :: Matrix (Complex Double) -> String
 makeMFileC = makeMFile showC
-    
+
 showC :: Complex Double -> String
 showC (x :+ y) | y P.>= 0 = '(' : printf "%e" x P.++ '+' : printf "%e" y P.++ "j)"
                 | P.otherwise = '(' : printf "%e" x P.++ printf "%e" y P.++ "j)"
@@ -197,7 +197,7 @@ parseComplex s  =
         readDouble s         = P.splitAt 24 s
 
 parseTuple3 :: P.Read a => String -> (a,a,a)
-parseTuple3 s = 
+parseTuple3 s =
     let valid c = c P./= ',' P.&& P.not (isSpace c)
         (x, _ : rest0) = P.span valid s
         (y, _ : rest1) = P.span valid rest0
@@ -235,9 +235,9 @@ testing6 :: Elt e => Acc (Matrix e) -> Acc (Matrix e)
 testing6 guv = let
     sh = shape guv
     Z :. n :. _ = unlift sh :: Z :. Exp Int :. Exp Int
-    indexer (unlift -> Z :. y :. x) = if x== 0 || y == 0 
-        then index2 y x 
-        else index2 (n - y) (n - x) 
+    indexer (unlift -> Z :. y :. x) = if x== 0 || y == 0
+        then index2 y x
+        else index2 (n - y) (n - x)
 
     oddReshape = (reverseOn _2 . reverseOn _1) guv
     evenReshape = backpermute sh indexer guv
@@ -334,8 +334,8 @@ thekernelsTest = let cpusteps = 16
     in myfor (cpusteps - 1) (\i old -> concatOn _2 (makeWKernel i) old) (makeWKernel (cpusteps - 1))
 
 testFixbounds :: Acc (Matrix (Complex Double))-- Acc (Vector (Int, Int, Int))
-testFixbounds = 
-    let 
+testFixbounds =
+    let
         v1 ::  Acc (Vector (Int, Int, Complex Double))
         v1 = use $ fromList (Z :. 10) [((2 * x)  `P.mod` 5 ,(3 * x + 1) `P.mod` 5, ( (fromIntegral $ x+5) :+ 1.0)) | x <- [0..] ]
         width = constant 5 :: Exp Int
@@ -343,14 +343,14 @@ testFixbounds =
         cc0 = (lift (constant 0.0 :+ constant 0.0))
         a = fill (index2 height width) cc0
 
-        fullrepli i j origin = 
-            let 
+        fullrepli i j origin =
+            let
                 offsety = constant $ i :: Exp Int
                 offsetx = constant $ j :: Exp Int
                 f = fixoutofboundsOLD offsetx offsety width height cc0
                 checkbounds = map f v1
                 (x, y, source) = unzip3 $ checkbounds :: (Acc (Vector Int), Acc (Vector Int), Acc (Vector (Complex Double)))
-                indexer id = 
+                indexer id =
                     let y' = y ! id + offsety
                         x' = x ! id + offsetx
                     in lift (Z :. y' :. x')
@@ -358,15 +358,15 @@ testFixbounds =
     in fullrepli 0 1 $fullrepli 1 0 $ fullrepli 1 1 $ fullrepli 0 0 a
 
 testFixbounds2 :: Acc (Matrix (Complex Double))-- Acc (Vector (Int, Int, Int))
-testFixbounds2 = 
-    let 
+testFixbounds2 =
+    let
         v1 ::  Acc (Vector (Int, Int, Int, Int, Complex Double))
-        v1 = use $ fromList (Z :. 10) 
+        v1 = use $ fromList (Z :. 10)
             [((2 * x)  `P.mod` 5
             , x `P.mod` 2
             ,(3 * x + 2) `P.mod` 5
             , x `P.mod` 2
-            , ( (fromIntegral $ x+5) :+ 1.0)) 
+            , ( (fromIntegral $ x+5) :+ 1.0))
                 | x <- [0..] ]
         width = constant 5 :: Exp Int
         height = constant 5 :: Exp Int
@@ -378,28 +378,28 @@ testFixbounds2 =
         gcf = use $ fromList (Z :. 2 :. 2 :. 2 :. 2) [ x :+ x | x <- [0..] ] :: Acc (Array DIM4 (Complex Double) )
 
         getComplex :: Exp DIM3 -> Exp (Int, Int, Int, Int, Complex Double) -> Exp (Int, Int, Complex Double)
-        getComplex 
+        getComplex
             (unlift . unindex3 -> (_, i, j) ::(Exp Int,Exp Int,Exp Int))
             (unlift -> (x, xf, y, yf, vis)::(Exp Int,Exp Int,Exp Int,Exp Int,Exp (Complex Double))) =
             lift ( x + j
                  , y + i
                  , vis * gcf ! lift (Z :. yf :. xf :. i :. j) )
 
-        
+
         totv1 = replicate (constant (Z :. All :. (2 :: Int) :. (2 :: Int))) v1
         withkern = imap getComplex totv1
         (x,y, val) = unzip3 $ map fixer withkern
 
         indexer id =
             let y' = y ! id
-                x' = x ! id  
+                x' = x ! id
             in index2 y' x'
     in permute (+) a indexer val
 
 
 fixoutofboundsOLD ::Elt a => Exp Int -> Exp Int -> Exp Int -> Exp Int -> Exp a -> Exp (Int, Int, a) -> Exp (Int, Int, a)
-fixoutofboundsOLD offsetx offsety maxx maxy def 
-                old@(unlift -> (x', y', _) ::(Exp Int,Exp Int,Exp a)) = 
+fixoutofboundsOLD offsetx offsety maxx maxy def
+                old@(unlift -> (x', y', _) ::(Exp Int,Exp Int,Exp a)) =
     let idx = x' + offsetx
         idy = y' + offsety
         outofbounds = idx < c0 || idy < c0 || idx >= maxx || idy >= maxy
@@ -409,3 +409,4 @@ fixoutofboundsOLD offsetx offsety maxx maxy def
         newv = def
         new = lift (newx, newy, newv)
     in if outofbounds then new else old
+

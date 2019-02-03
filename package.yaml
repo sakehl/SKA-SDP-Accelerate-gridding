@@ -1,0 +1,54 @@
+name:                ska-sdp-accelerate
+version:             0.1.0.0
+github:              "sakehl/SKA-SDP-Accelerate-gridding"
+license:             BSD3
+author:              "Lars van den Haak"
+maintainer:          "Lars van den Haak &lt;l.b.vandenhaak@gmail.com&gt;"
+copyright:           "Copyright (c) [2019..]. Lars van den Haak &lt;l.b.vandenhaak@gmail.com&gt;"
+
+extra-source-files:
+- README.md
+- CHANGELOG.md
+
+# Metadata used when publishing your package
+# synopsis:            Short description of your package
+# category:            Web
+
+# To avoid duplicated efforts in documentation and dealing with the
+# complications of embedding Haddock markup inside cabal files, it is
+# common to point users to the README.md file.
+description:         Please see the README on GitHub at <https://github.com/sakehl/SKA-SDP-Accelerate-gridding#readme>
+
+dependencies:
+  - base >= 4.7 && < 5
+  - accelerate
+  - accelerate-llvm-native
+  - accelerate-fft
+  - lens
+
+library:
+  source-dirs: src
+
+# executables:
+#   ska-sdp-accelerate-exe:
+#     main:                Main.hs
+#     source-dirs:         app
+#     ghc-options:
+#       - -threaded
+#       - -rtsopts
+#       - -with-rtsopts=-N
+#     dependencies:
+#       - ska-sdp-accelerate
+
+# tests:
+#   ska-sdp-accelerate-test:
+#     main:                Spec.hs
+#     source-dirs:         test
+#     ghc-options:
+#       - -threaded
+#       - -rtsopts
+#       - -with-rtsopts=-N
+#     dependencies:
+#       - ska-sdp-accelerate
+
+# vim: nospell
