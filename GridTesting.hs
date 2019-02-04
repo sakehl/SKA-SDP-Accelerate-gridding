@@ -14,6 +14,7 @@ import Data.Array.Accelerate.Math.FFT                     as A
 
 import Data.Array.Accelerate.LLVM.Native                  as CPU
 import Data.Array.Accelerate.Interpreter                  as I
+import Data.Array.Accelerate.Debug                  as A
 
 import Gridding
 
@@ -31,6 +32,12 @@ import Control.Lens as L (_1, _2, (^.) )
 
 main :: IO ()
 main = testConv
+
+setflags :: IO ()
+setflags = do
+    --setFlag dump_cc
+    --setFlag dump_sched
+    setFlag dump_phases
 
 ----------------------
 -- I/O things (for testing)
@@ -50,15 +57,12 @@ testSimple = do
         thecode = do_imaging theta lam uvw src vis simple_imaging kwargs otargs
         (d,p, _) = CPU.run $ thecode
         (muvw, mvis) = unzip $ mirror_uvw (use uvw) (use vis)
-
-        fst i j = indexArray d (Z :. i :. j)
-        maxi = P.maximum (toList d)
-        maxi2 = (CPU.run . maximum . flatten . (^. _1) ) (unlift thecode :: (Acc (Matrix Double), Acc (Matrix Double), Acc (Scalar Double)))
+        (dmax, pmax) = CPU.run $ dpmax thecode
     --P.writeFile "data/mirror_uvw.csv" (makeVFile (showTriple $ printf "%e") (CPU.run muvw))
     --P.writeFile "data/result.csv" (makeMFile (printf "%e") d)
     --P.writeFile "data/result_p.csv" (makeMFile (printf "%e") p)
     --P.writeFile ("data/generated_simple.hs") (P.show thecode)
-    P.putStrLn (P.show maxi2)
+    P.putStrLn (P.show dmax)
 
 testWCache :: IO ()
 testWCache = do
@@ -69,33 +73,48 @@ testWCache = do
         vis = fromList size $ P.fst testData
         uvw = fromList size $ P.snd testData
         src      = undefined
-        theta    = 2*0.05
+        theta    = 2*0.005
         lam      = 18000
         qpx      = 2
-        w        = 1000
-        npixFF   = 16
-        npixKern = 4
+        w        = 10000
+        wstep    = constant w
+        npixFF   = 256
+        npixKern = 31
         kwargs   = noArgs {wstep= Just w, qpx= Just qpx, npixFF= Just npixFF, npixKern= Just npixKern}
         otargs   = noOtherArgs
-        (d,p, _) = CPU.run $ do_imaging theta lam uvw src vis w_cache_imaging kwargs otargs
-        convKern = CPU.run $ w_kernel (constant theta) (constant (fromIntegral w)) kwargs
-        convKern' = arrayReshape (Z :. (arraySize . arrayShape ) convKern ) convKern
+        --convKern = CPU.run $ w_kernel (constant theta) (constant (fromIntegral w)) kwargs
+        --convKern' = arrayReshape (Z :. (arraySize . arrayShape ) convKern ) convKern
+        dimg = do_imaging theta lam uvw src vis w_cache_imaging kwargs otargs
+        (d,p, pmax2) = CPU.run $ dimg
+        (dmax, pmax) = CPU.run $ dpmax dimg
 
         (l, m) = unlift $ kernel_coordinates (constant 256) (constant theta) kwargs :: (Acc (Matrix Double), Acc (Matrix Double))
         kern = w_kernel_function l m (constant (fromIntegral w))
         padff = pad_mid kern (constant npixFF * constant qpx)
         af = ifft padff
 
-        fst i j = indexArray d (Z :. i :. j)
-        maxi = P.maximum (toList d)
+        (_,_,ww) = unzip3 (use uvw)
+        roundedw = map (\w' -> wstep * round ( w' / A.fromIntegral wstep)) ww
+        maxww = the $ maximum ww 
+        maxw = the $ maximum roundedw :: Exp Int
+        minw = the $ minimum roundedw :: Exp Int
+        steps = ((maxw - minw) `div` wstep ) + 1 :: Exp Int
+        (cpumin, cpumax, cpusteps, cpumaxww) = CPU.run (unit $ lift (minw, maxw, steps, maxww)) `indexArray` Z
+        wbins = map (\rw' -> (rw' - constant cpumin) `div` wstep) roundedw
+        
+
     --P.writeFile "data/mirror_uvw.csv" (makeVFile (showTriple $ printf "%e") (CPU.run muvw))
+
     --P.writeFile "data/result.csv" (makeMFile (printf "%e") d)
     --P.writeFile "data/result_p.csv" (makeMFile (printf "%e") p)
-    P.putStrLn (P.show ((maxi)))
+    --P.putStrLn (P.show ((dmax, pmax)))
     --P.writeFile "data/result_conv.csv" (makeVFile (showC) convKern')
     --P.writeFile "data/result_kern.csv" (makeMFile (showC) kern)
     --P.writeFile "data/result_af.csv" (makeMFile (showC) (CPU.run af))
     --P.putStrLn (P.show ((convKern `indexArray` (Z :. 0 :. 0 :. 0 :. 0) )))
+    P.putStrLn (P.show (cpumin, cpumax, cpusteps, cpumaxww) )
+    P.putStrLn (P.show pmax2)
+    --P.putStrLn (P.show (CPU.run wbins))
 
 testConv :: IO ()
 testConv = do
@@ -118,19 +137,17 @@ testConv = do
         convKern' = CPU.run $ flatten (use convKern)
         kwargs   = noArgs {wstep= Just w, qpx= Just qpx, npixFF= Just npixFF, npixKern= Just npixKern}
         otargs   = noOtherArgs {convolutionKernel = Just convKern}
-        (d,p, pmax) = CPU.run $ do_imaging theta lam uvw src vis conv_imaging kwargs otargs
-
-        maxi = CPU.run $ (maximum . flatten ) (use d)
-
-
-        --maxi = P.maximum (toList d)
+        dimg = do_imaging theta lam uvw src vis conv_imaging kwargs otargs 
+        (d,p, _) = CPU.run dimg
+        (dmax, pmax) = CPU.run $ dpmax dimg
+        
     --P.writeFile "data/mirror_uvw.csv" (makeVFile (showTriple $ printf "%e") (CPU.run muvw))
     --P.writeFile "data/result.csv" (makeMFile (printf "%e") d)
     --P.writeFile "data/result_coords.csv" (makeVFile (showQuad P.show) (CPU.run coords))
-    P.writeFile "data/result_kern.csv" (makeVFile (showC) convKern')
+    --P.writeFile "data/resultConv_kern.csv" (makeVFile (showC) convKern')
     --P.writeFile "data/result_p.csv" (makeMFile (printf "%e") p)
-    P.writeFile "data/result.csv" (makeMFile (printf "%e") d)
-    P.putStrLn (P.show ((maxi)))
+    --P.writeFile "data/resultConv.csv" (makeMFile (printf "%e") d)
+    P.putStrLn (P.show ((dmax, pmax)))
 
 instance (P.Ord a) => P.Ord (Complex a)
     where
@@ -409,3 +426,9 @@ fixoutofboundsOLD offsetx offsety maxx maxy def
         newv = def
         new = lift (newx, newy, newv)
     in if outofbounds then new else old
+
+
+dpmax :: Acc (Matrix Double,Matrix Double, Scalar Double) ->  Acc (Scalar Double, Scalar Double)
+dpmax (unlift -> (d, _, pmax) :: (Acc (Matrix Double),Acc (Matrix Double),Acc (Scalar Double)) ) =
+    let dmax = maximum . flatten $ d
+    in lift (dmax, pmax) 

@@ -256,14 +256,18 @@ w_cache_imaging theta lam uvw src vis
         (cpumin, cpumax, cpusteps) = CPU.run (unit $ lift (minw, maxw, steps)) `indexArray` Z
 
         wbins = map (\rw' -> (rw' - constant cpumin) `div` wstep) roundedw
- 
-        makeWKernel i = let wbin = (A.fromIntegral $ constant i * wstep + constant cpumin)
+        --wbins = 
+    
+        makeWKernel :: Int -> Acc (Array DIM5 (Complex Double))
+        makeWKernel i = 
+            let myi = use $ fromList Z [i]
+                wbin = (A.fromIntegral $ the myi * wstep + constant cpumin)
             in make5D $ kernel_cache (constant theta) wbin kwargs
         make5D mat = let (Z :. yf :. xf :. y :. x) =  (unlift . shape) mat :: (Z :.Exp Int :. Exp Int :. Exp Int :. Exp Int)
                          newsh = lift (Z :. constant 1 :. yf :. xf :. y :. x) :: Exp DIM5
                      in reshape newsh mat
 
-        thekernels = myfor (cpusteps - 1) (\i old -> concatOn _5 (makeWKernel i) old) (makeWKernel (cpusteps - 1))
+        thekernels = myfor (cpusteps - 1) (\i old -> concatOn _5 old (makeWKernel i)) (makeWKernel (cpusteps - 1))
     in convgrid2 thekernels guv p wbins vis
 
 ----------------------------------
@@ -597,7 +601,7 @@ addMessage mes action =
     let io = unsafePerformIO (P.putStrLn mes)
     in P.seq action (P.seq io action)
 
--- Check if the offset sets something out of bounds
+-- Check if the coordinates are out of bounds, and sets them to zero otherwise
 fixoutofbounds :: Elt a => Exp Int -> Exp Int -> Exp a -> Exp (Int, Int, a) -> Exp (Int, Int, a)
 fixoutofbounds maxx maxy defv
                 old@(unlift -> (x', y', _) ::(Exp Int,Exp Int,Exp a)) = 
