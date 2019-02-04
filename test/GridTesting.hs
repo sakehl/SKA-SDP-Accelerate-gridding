@@ -9,7 +9,7 @@ module Main where
 import Data.Array.Accelerate                              as A hiding (fromInteger, fromRational, fromIntegral)
 import qualified Data.Array.Accelerate                    as A (fromInteger, fromRational, fromIntegral)
 import Data.Array.Accelerate.Data.Complex                 as A
-import Data.Array.Accelerate.Math.DFT.Centre              as A hiding (shift1D, shift2D, shift3D)
+import Data.Array.Accelerate.Math.DFT.Centre              as A
 import Data.Array.Accelerate.Math.FFT                     as A
 
 import Data.Array.Accelerate.LLVM.Native                  as CPU
@@ -105,8 +105,9 @@ testWCache = do
 
     --P.writeFile "data/mirror_uvw.csv" (makeVFile (showTriple $ printf "%e") (CPU.run muvw))
 
-    --P.writeFile "data/result.csv" (makeMFile (printf "%e") d)
-    --P.writeFile "data/result_p.csv" (makeMFile (printf "%e") p)
+    P.writeFile "data/result.csv" (makeMFile (printf "%e") d)
+    P.writeFile "data/result_p.csv" (makeMFile (printf "%e") p)
+    P.writeFile "data/roundedw.csv" (makeVFile (P.show) (CPU.run roundedw))
     --P.putStrLn (P.show ((dmax, pmax)))
     --P.writeFile "data/result_conv.csv" (makeVFile (showC) convKern')
     --P.writeFile "data/result_kern.csv" (makeMFile (showC) kern)
@@ -154,7 +155,7 @@ instance (P.Ord a) => P.Ord (Complex a)
         (x1 :+ y1) <=  (x2 :+ y2) | x1 P.== x2 = y1 P.<= y2
                                   | P.otherwise = x1 P.<= x2
 
-makeMFile :: (a -> String) -> Matrix a -> String
+makeMFile :: Elt a => (a -> String) -> Matrix a -> String
 makeMFile showf mat = let
     (Z :. n :. m) = arrayShape  mat
     ls =  P.map showf $ toList mat
@@ -167,7 +168,7 @@ makeMFile showf mat = let
 
     in P.unlines rows
 
-makeVFile :: (a -> String) -> Vector a -> String
+makeVFile :: Elt a => (a -> String) -> Vector a -> String
 makeVFile showf v = let
     (Z :. n) = arrayShape v
     ls =  P.map showf $ toList v
@@ -431,3 +432,10 @@ dpmax :: Acc (Matrix Double,Matrix Double, Scalar Double) ->  Acc (Scalar Double
 dpmax (unlift -> (d, _, pmax) :: (Acc (Matrix Double),Acc (Matrix Double),Acc (Scalar Double)) ) =
     let dmax = maximum . flatten $ d
     in lift (dmax, pmax) 
+
+testConcat :: Acc (Array DIM2 Int)
+testConcat =
+    let mylist i = let myi = use $ fromList Z [i]
+                   in replicate (constant (Any :. (1::Int) :. (4::Int))) myi
+        cpusteps = 3
+    in myfor (cpusteps - 1) (\i old -> concatOn _2 (mylist i) old) (mylist (cpusteps - 1))

@@ -261,12 +261,12 @@ w_cache_imaging theta lam uvw src vis
         makeWKernel i = 
             let myi = use $ fromList Z [i]
                 wbin = (A.fromIntegral $ the myi * wstep + constant cpumin)
-            in make5D $ kernel_cache (constant theta) wbin kwargs
+            in make5D . map conjugate $ kernel_cache (constant theta) wbin kwargs
         make5D mat = let (Z :. yf :. xf :. y :. x) =  (unlift . shape) mat :: (Z :.Exp Int :. Exp Int :. Exp Int :. Exp Int)
                          newsh = lift (Z :. constant 1 :. yf :. xf :. y :. x) :: Exp DIM5
                      in reshape newsh mat
 
-        thekernels = myfor (cpusteps - 1) (\i old -> concatOn _5 old (makeWKernel i)) (makeWKernel (cpusteps - 1))
+        thekernels = myfor (cpusteps - 1) (\i old -> concatOn _5 (makeWKernel i) old) (makeWKernel (cpusteps - 1))
     in convgrid2 thekernels guv p wbins vis
 
 ----------------------------------
