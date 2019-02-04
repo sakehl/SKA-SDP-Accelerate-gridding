@@ -9,8 +9,8 @@ module Gridding where
 import Data.Array.Accelerate                              as A hiding (fromInteger, fromRational, fromIntegral)
 import qualified Data.Array.Accelerate                    as A (fromInteger, fromRational, fromIntegral)
 import Data.Array.Accelerate.Data.Complex                 as A
-import Data.Array.Accelerate.Math.DFT.Centre              as A hiding (shift1D, shift2D, shift3D)
-import Data.Array.Accelerate.Math.FFT                     as A 
+import Data.Array.Accelerate.Math.DFT.Centre              as A
+import Data.Array.Accelerate.Math.FFT                     as A
 
 import Data.Array.Accelerate.LLVM.Native                  as CPU
 import Data.Array.Accelerate.Interpreter                  as I
@@ -33,7 +33,7 @@ data Kwargs = Kwargs { patHorShift :: Maybe Int
                      , npixKern :: Maybe Int         -- Kernel size (if it is same size in x and y)
                      }
 
-data OtherImagingArgs = OtherImagingArgs 
+data OtherImagingArgs = OtherImagingArgs
                       { convolutionKernel :: Maybe ((Array DIM4 (Complex Double)))
                       , kernelCache :: Maybe KernelF
                       , kernelFunction :: Maybe KernelF
@@ -41,7 +41,7 @@ data OtherImagingArgs = OtherImagingArgs
 
 type KernelF = Exp Double                              -- Field of view
              -> Exp Double                           -- Baseline distance to the projection plane
-             -> Kwargs                               -- Additional kernel arguments               
+             -> Kwargs                               -- Additional kernel arguments
              -> Acc (Array DIM4 (Complex Double))    -- [Qpx,Qpx,s,s] shaped oversampled convolution kernels
 
 noArgs :: Kwargs
@@ -108,7 +108,7 @@ frac_coord :: Exp Int                                   -- The height/width
            -> Exp Int                                   -- Oversampling factor
            -> Acc (Vector Double)                       -- a uvw baseline, but between -.5 and .5
            -> Acc (Vector (Int, Int))
-frac_coord n qpx p = 
+frac_coord n qpx p =
     let halfn = n `div` 2
         halfnf = A.fromIntegral halfn
         nf = A.fromIntegral n
@@ -169,7 +169,7 @@ convgrid gcf a p v =
             in index2 y' x'
 
         getComplexAndAddOffset :: Exp DIM3 -> Exp (Int, Int, Int, Int, Complex Double) -> Exp (Int, Int, Complex Double)
-        getComplexAndAddOffset 
+        getComplexAndAddOffset
             (unlift . unindex3 -> (_, i, j) ::(Exp Int,Exp Int,Exp Int))
             (unlift -> (x, xf, y, yf, vis)::(Exp Int,Exp Int,Exp Int,Exp Int,Exp (Complex Double))) =
             lift ( x + j
@@ -214,29 +214,29 @@ convgrid2 gcf a p wbin v =
             let y' = y ! id
                 x' = x ! id
             in index2 y' x'
-        
+
         getComplexAndAddOffset :: Exp DIM3 -> Exp (Int, Int, Int, Int, Int, Complex Double) -> Exp (Int, Int, Complex Double)
-        getComplexAndAddOffset 
+        getComplexAndAddOffset
             (unlift . unindex3 -> (_, i, j) ::(Exp Int,Exp Int,Exp Int))
             (unlift -> (wbin, x, xf, y, yf, vis)::(Exp Int,Exp Int,Exp Int,Exp Int,Exp Int,Exp (Complex Double))) =
             lift ( x + j
                  , y + i
-                 , vis * gcf ! lift (Z :. wbin :. yf :. xf :. i :. j) )        
+                 , vis * gcf ! lift (Z :. wbin :. yf :. xf :. i :. j) )
     in permute (+) a indexer val
 
 -- Imaging with a w kernel
 w_cache_imaging :: ImagingFunction
-w_cache_imaging theta lam uvw src vis 
+w_cache_imaging theta lam uvw src vis
  kwargs@Kwargs{wstep = wstep', qpx = qpx'}
  otargs@OtherImagingArgs{kernelCache = kernel_cache', kernelFunction = kernel_fn'} =
-    let 
+    let
         -- They use a LRU cache for the function, to memoize the results. Maybe usefull. Not sure yet.
         -- So maybe use LRU cache implementation (lrucache package) or memoization (memoize package)
         -- For now we just call the function.
         kernel_fn    = fromMaybe w_kernel kernel_fn'
         kernel_cache = fromMaybe kernel_fn kernel_cache'
         wstep = constant $ fromMaybe 2000 wstep'
-        
+
         lamf = fromIntegral lam
         n = P.round(theta * lamf)
         ne = constant n
@@ -244,8 +244,8 @@ w_cache_imaging theta lam uvw src vis
         p = map (`div3` constant lamf) uvw
         czero = constant 0
         guv = fill (index2 ne ne) czero :: Acc (Matrix (Complex Double))
-        
-        
+
+
         -- We just make them all here, that's easiest for now
         --thekernels = fromList (Z :. wstep) [0..] :: Vector Double
         (_,_,w) = unzip3 uvw
@@ -256,7 +256,6 @@ w_cache_imaging theta lam uvw src vis
         (cpumin, cpumax, cpusteps) = CPU.run (unit $ lift (minw, maxw, steps)) `indexArray` Z
 
         wbins = map (\rw' -> (rw' - constant cpumin) `div` wstep) roundedw
-        --wbins = 
     
         makeWKernel :: Int -> Acc (Array DIM5 (Complex Double))
         makeWKernel i = 
@@ -281,7 +280,7 @@ do_imaging :: Double                                 -- Field of view size
            -> Kwargs
            -> OtherImagingArgs
            -> Acc (Matrix Double,Matrix Double, Scalar Double)
-do_imaging theta lam uvw src vis imgfn kwargs otargs = 
+do_imaging theta lam uvw src vis imgfn kwargs otargs =
     let
         -- TODO: if src == None: src = numpy.ndarray((len(vis), 0))
         len = arrayShape vis
@@ -290,7 +289,7 @@ do_imaging theta lam uvw src vis imgfn kwargs otargs =
         src0 = use src
         -- Mirror baselines such that v>0
         (uvw1,vis1) = unzip $ mirror_uvw uvw0 vis0
-        
+
         -- Determine weights
         ones = fill (lift len) 1
         wt = doweight theta lam uvw1 ones
@@ -312,12 +311,12 @@ do_imaging theta lam uvw src vis imgfn kwargs otargs =
 mirror_uvw :: Acc (Vector (Double, Double, Double))                     -- all the uvw baselines (coordinates) (lenght : n * (n-1))
            -> Acc (Vector (Complex Double))                             -- visibility  (length n * (n-1))
            -> Acc (Vector ((Double, Double, Double), Complex Double))
-mirror_uvw uvw vis = 
+mirror_uvw uvw vis =
     let
         (u,v,w) = unzip3 uvw
         uvwvis = zip4 u v w vis
         mirrorv o@(unlift -> (u,v,w,vis) :: (Exp Double, Exp Double, Exp Double, Exp (Complex Double))) =
-            if v < 0 
+            if v < 0
                 then lift ((-u, -v, -w), conjugate vis)
                 else lift ((u,v,w),vis)
     in map mirrorv uvwvis
@@ -328,7 +327,7 @@ doweight :: Double                                                  -- Field of 
          -> Acc (Vector (Double, Double, Double))                   -- all the uvw baselines (coordinates) (lenght : n * (n-1))
          -> Acc (Vector (Complex Double))                           -- Array of ones (same size as visibility  (length n * (n-1)))
          -> Acc (Vector (Complex Double))
-doweight theta lam p v = 
+doweight theta lam p v =
     let
         n = P.round(theta * lamf)
         lamf = fromIntegral lam
@@ -341,17 +340,17 @@ doweight theta lam p v =
         xyindex = zipWith index2 y x
         weights = permute (+) gw (\id -> xyindex ! id) ones
 
-        newv = imap (\id v -> v / lift (weights ! (xyindex ! id) :+ 0)) v 
+        newv = imap (\id v -> v / lift (weights ! (xyindex ! id) :+ 0)) v
     in newv
 
 make_grid_hermitian :: Acc (Matrix (Complex Double)) -> Acc (Matrix (Complex Double))
 make_grid_hermitian guv = let
         sh = shape guv
         Z :. n :. _ = unlift sh :: Z :. Exp Int :. Exp Int
-        indexer (unlift -> Z :. y :. x) = if x== 0 || y == 0 
-            then index2 y x 
+        indexer (unlift -> Z :. y :. x) = if x== 0 || y == 0
+            then index2 y x
             else index2 (n - y) (n - x)
-        mapper (unlift -> Z :. y :. x) v = if x== 0 || y == 0 
+        mapper (unlift -> Z :. y :. x) v = if x== 0 || y == 0
             then 0
             else conjugate v
 
@@ -371,8 +370,8 @@ make_grid_hermitian guv = let
 -- Kernels
 w_kernel :: Exp Double                           -- Field of view
          -> Exp Double                           -- Baseline distance to the projection plane
-         -> Kwargs                               -- Additional kernel arguments               
-         -> Acc (Array DIM4 (Complex Double))    -- [Qpx,Qpx,s,s] shaped oversampled convolution kernels             
+         -> Kwargs                               -- Additional kernel arguments
+         -> Acc (Array DIM4 (Complex Double))    -- [Qpx,Qpx,s,s] shaped oversampled convolution kernels
 w_kernel theta w
     kwargs@Kwargs{npixFF = npixFF', npixKern = npixKern', qpx = qpx'} =
     let
@@ -388,14 +387,14 @@ kernel_coordinates n theta kwargs =
     let
         dl = (constant . fromIntegral . fromMaybe 0 . patHorShift) kwargs
         dm = (constant . fromIntegral . fromMaybe 0 . patVerShift) kwargs
-        (l,m) = unlift $ coordinates2 n :: (Acc (Matrix Double), Acc (Matrix Double)) 
+        (l,m) = unlift $ coordinates2 n :: (Acc (Matrix Double), Acc (Matrix Double))
         lm1 = map (liftTupf (*theta) (*theta)) (zip l m)
         lm2 = case patTransMat kwargs of
             Nothing -> lm1
             Just t  -> map (\pair -> let (x, y) = unlift pair in lift
                 ( (t ! index2 0 0) * x + (t ! index2 1 0) * y
                 , (t ! index2 0 1) * x + (t ! index2 1 1) * y ) ) lm1
-        
+
         lm3 = map (liftTupf (+dl) (+dm)) lm2
     in lift $ unzip lm3
 
@@ -403,7 +402,7 @@ coordinates2 :: Exp Int -> Acc (Matrix Double, Matrix Double)
 coordinates2 n =
     let
         n2 = n `div` 2
-        sh = index1 n 
+        sh = index1 n
         sh2 = index2 n n
         start = A.fromIntegral (-n2) * step
         step = 1 / A.fromIntegral n
@@ -417,7 +416,7 @@ w_kernel_function :: Acc (Matrix Double)              -- Horizontal image coordi
                   -> Acc (Matrix Double)              -- Vertical image coordinates
                   -> Exp Double                       -- Baseline distance to the projection plane
                   -> Acc (Matrix (Complex Double))    --N x N array with the far field
-w_kernel_function l m w = 
+w_kernel_function l m w =
     let r2 = zipWith (\x y -> x*x + y*y) l m
     {-  dl and dm seem to be always zero anyway in the reference code
         dl = 0
@@ -446,7 +445,7 @@ kernel_oversample ff n qpx s =
 pad_mid :: Acc (Matrix (Complex Double))    -- The input far field. Should be smaller than NxN
         -> Exp Int                          -- The desired far field size
         -> Acc (Matrix (Complex Double))    -- The far field, NxN
-pad_mid ff n = 
+pad_mid ff n =
     let
         Z :. n0 :. n0w = (unlift . shape) ff :: Z :. Exp Int :. Exp Int
         result = if n == n0 then ff else padded
@@ -459,7 +458,7 @@ extract_oversampled :: Acc (Matrix (Complex Double))        -- grid from which t
                     -> Exp Int                              -- size of section
                     -> Acc (Array DIM4 (Complex Double))    -- Return the oversampled kernels with shape qpx x qpx x n x n
 extract_oversampled a qpx n =
-    let 
+    let
         -- In contrast to the python code, we return all the oversampled kernels at once, instead of one at a time
         na = (indexHead . shape) a
         cons = (na `div` 2) - qpx * (n `div` 2)
@@ -469,7 +468,7 @@ extract_oversampled a qpx n =
         indexer (unlift -> Z :. yf :. xf :. y :. x :: Z :. Exp Int :. Exp Int :. Exp Int :. Exp Int)
             =  let newy = m yf + qpx * y
                    newx = m xf + qpx * x
-               in index2 newy newx 
+               in index2 newy newx
 
         w_kern = backpermute news indexer a
         qpx2 = A.fromIntegral (qpx * qpx)
@@ -483,8 +482,9 @@ fft = shift2D . fft2D Forward . ishift2D
 ifft :: Acc (Matrix (Complex Double)) -> Acc (Matrix (Complex Double))
 ifft = shift2D . fft2D Inverse . ishift2D
 
+{--
 shift1D :: Elt e => Acc (Vector e) -> Acc (Vector e)
-shift1D arr = backpermute sh p arr  
+shift1D arr = backpermute sh p arr
       where
         sh      = shape arr
         n       = indexHead sh
@@ -494,7 +494,7 @@ shift1D arr = backpermute sh p arr
         p       = ilift1 roll
 
 ishift1D :: Elt e => Acc (Vector e) -> Acc (Vector e)
-ishift1D arr = backpermute sh p arr  
+ishift1D arr = backpermute sh p arr
       where
         sh      = shape arr
         n       = indexHead sh
@@ -566,6 +566,7 @@ ishift3D arr
         in index3 ((z + shiftd) `rem` d)
                   ((y + shifth) `rem` h)
                   ((x + shiftw) `rem` w)
+--}
 
 ------------------------
 -- Helper functions
@@ -588,7 +589,7 @@ padder array pad_width_x pad_width_y constant_val =
         Z :. m :. n = (unlift . shape) array :: ( Z :. Exp Int :. Exp Int)
         def = fill (index2 (m + y0 + y1) (n + x0 + x1)) constant_val
 
-        indexer (unlift -> Z :. y :. x :: Z :. Exp Int :. Exp Int) 
+        indexer (unlift -> Z :. y :. x :: Z :. Exp Int :. Exp Int)
             = index2 (y + y0) (x + x0)
         result = permute const def indexer array
     in result
@@ -597,17 +598,18 @@ c0 :: Exp Int
 c0 = constant 0
 
 addMessage :: String -> a -> a
-addMessage mes action = 
+addMessage mes action =
     let io = unsafePerformIO (P.putStrLn mes)
     in P.seq action (P.seq io action)
 
 -- Check if the coordinates are out of bounds, and sets them to zero otherwise
 fixoutofbounds :: Elt a => Exp Int -> Exp Int -> Exp a -> Exp (Int, Int, a) -> Exp (Int, Int, a)
 fixoutofbounds maxx maxy defv
-                old@(unlift -> (x', y', _) ::(Exp Int,Exp Int,Exp a)) = 
+                old@(unlift -> (x', y', _) ::(Exp Int,Exp Int,Exp a)) =
     let outofbounds = x' < c0 || y' < c0 || x' >= maxx || y' >= maxy
         -- If out of bounds, set all values to zero (after the offset alters it)
         defx = c0 :: Exp Int
         defy = c0 :: Exp Int
         def = lift (defx, defy, defv)
     in if outofbounds then def else old
+
