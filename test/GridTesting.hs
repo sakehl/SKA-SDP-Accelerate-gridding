@@ -76,8 +76,9 @@ testWCache = do
         theta    = 2*0.005
         lam      = 18000
         qpx      = 2
-        w        = 10000
+        w        = 6000
         wstep    = constant w
+        wscalar = use $ fromList Z [fromIntegral w]
         npixFF   = 256
         npixKern = 31
         kwargs   = noArgs {wstep= Just w, qpx= Just qpx, npixFF= Just npixFF, npixKern= Just npixKern}
@@ -89,7 +90,7 @@ testWCache = do
         (dmax, pmax) = CPU.run $ dpmax dimg
 
         (l, m) = unlift $ kernel_coordinates (constant 256) (constant theta) kwargs :: (Acc (Matrix Double), Acc (Matrix Double))
-        kern = w_kernel_function l m (constant (fromIntegral w))
+        kern = w_kernel_function l m wscalar
         padff = pad_mid kern (constant npixFF * constant qpx)
         af = ifft padff
 
@@ -105,15 +106,15 @@ testWCache = do
 
     --P.writeFile "data/mirror_uvw.csv" (makeVFile (showTriple $ printf "%e") (CPU.run muvw))
 
-    P.writeFile "data/result.csv" (makeMFile (printf "%e") d)
-    P.writeFile "data/result_p.csv" (makeMFile (printf "%e") p)
-    P.writeFile "data/roundedw.csv" (makeVFile (P.show) (CPU.run roundedw))
+    --P.writeFile "data/result.csv" (makeMFile (printf "%e") d)
+    --P.writeFile "data/result_p.csv" (makeMFile (printf "%e") p)
+    --P.writeFile "data/roundedw.csv" (makeVFile (P.show) (CPU.run roundedw))
     --P.putStrLn (P.show ((dmax, pmax)))
     --P.writeFile "data/result_conv.csv" (makeVFile (showC) convKern')
     --P.writeFile "data/result_kern.csv" (makeMFile (showC) kern)
     --P.writeFile "data/result_af.csv" (makeMFile (showC) (CPU.run af))
     --P.putStrLn (P.show ((convKern `indexArray` (Z :. 0 :. 0 :. 0 :. 0) )))
-    P.putStrLn (P.show (cpumin, cpumax, cpusteps, cpumaxww) )
+    --P.putStrLn (P.show (cpumin, cpumax, cpusteps, cpumaxww) )
     P.putStrLn (P.show pmax2)
     --P.putStrLn (P.show (CPU.run wbins))
 
@@ -131,10 +132,11 @@ testConv = do
         lamf     = fromIntegral lam
         qpx      = 2
         w        = 1000
+        wscalar = use $ fromList Z [fromIntegral w]
         npixFF   = 256
         npixKern = 31
         ne = constant $ P.round(theta * lamf) :: Exp Int
-        convKern = CPU.run $ w_kernel (constant theta) (constant (fromIntegral w)) kwargs
+        convKern = CPU.run $ w_kernel (constant theta) wscalar kwargs
         convKern' = CPU.run $ flatten (use convKern)
         kwargs   = noArgs {wstep= Just w, qpx= Just qpx, npixFF= Just npixFF, npixKern= Just npixKern}
         otargs   = noOtherArgs {convolutionKernel = Just convKern}
@@ -193,8 +195,8 @@ showQuad print (w,x,y,z) = (intercalate ",") $ print w : print x : print y : pri
 -- Test input reading
 testData0 :: IO ([Complex Double], [(Double, Double, Double)])
 testData0 = do
-    visData <- P.readFile "vis.csv"
-    uvwData <- P.readFile "uvw.csv"
+    visData <- P.readFile "data/vis.csv"
+    uvwData <- P.readFile "data/uvw.csv"
     let vislines = P.lines visData
         visdat   = P.map parseComplex vislines
         uvwlines = P.lines uvwData
