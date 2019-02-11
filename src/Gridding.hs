@@ -275,19 +275,23 @@ w_cache_imaging theta lam uvw src vis
         (cpumin, cpumax, cpusteps) = CPU.run (unit $ lift (minw, maxw, steps)) `indexArray` Z
 
         wbins = map (\rw' -> (rw' - constant cpumin) `div` wstep) roundedw
-    
+        
         makeWKernel :: Int -> Acc (Array DIM5 (Complex Double))
-        makeWKernel i = 
-            --let myi = use $ fromList Z [i]
-            --    wbin = (A.fromIntegral $ the myi * wstep + constant cpumin)
-            let wbin = use $ fromList Z $ (fromIntegral $ i * wstep_ + cpumin) : []
-            in compute $ make5D . map conjugate $ only_wcache (constant theta) wbin kwargs
+        makeWKernel i = let wbin = fromList Z $ (fromIntegral $ i * wstep_ + cpumin) : []
+                        in use $ compiledMakeWKernel wbin
+        
+        compiledMakeWKernel = CPU.runN makeWKernel'
+        
+        makeWKernel' :: Acc (Scalar Double) -> Acc (Array DIM5 (Complex Double))
+        makeWKernel' wbin = make5D . map conjugate $ only_wcache (constant theta) wbin kwargs
+
+        
         make5D mat = let (Z :. yf :. xf :. y :. x) =  (unlift . shape) mat :: (Z :.Exp Int :. Exp Int :. Exp Int :. Exp Int)
                          newsh = lift (Z :. constant 1 :. yf :. xf :. y :. x) :: Exp DIM5
                      in reshape newsh mat
 
-        thekernels = myfor (cpusteps - 1) (\i old -> concatOn _5 (makeWKernel i) old) (makeWKernel (cpusteps - 1))
-    in convgrid2 thekernels guv p wbins vis
+        thekernels = CPU.runN $ compute $ myfor (cpusteps - 1) (\i old -> concatOn _5 (makeWKernel i) old) (makeWKernel (cpusteps - 1))
+    in convgrid2 (use thekernels) guv p wbins vis
 
 -- Imaging with aw-caches
 aw_cache_imaging :: ImagingFunction

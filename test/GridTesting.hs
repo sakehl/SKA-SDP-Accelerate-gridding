@@ -14,7 +14,7 @@ import Data.Array.Accelerate.Math.FFT                     as A
 
 import Data.Array.Accelerate.LLVM.Native                  as CPU
 import Data.Array.Accelerate.Interpreter                  as I
-import Data.Array.Accelerate.Debug                  as A
+import Data.Array.Accelerate.Debug                        as A
 
 import Gridding
 
@@ -33,11 +33,16 @@ import Control.Lens as L (_1, _2, (^.) )
 main :: IO ()
 main = testConv
 
+flags = [dump_phases]
+
 setflags :: IO ()
 setflags = do
     --setFlag dump_cc
     --setFlag dump_sched
-    setFlag dump_phases
+    setFlags flags
+
+unsetflags :: IO ()
+unsetflags = clearFlags flags
 
 ----------------------
 -- I/O things (for testing)
@@ -73,10 +78,10 @@ testWCache = do
         vis = fromList size $ P.fst testData
         uvw = fromList size $ P.snd testData
         src      = undefined
-        theta    = 2*0.005
+        theta    = 2*0.05
         lam      = 18000
         qpx      = 2
-        w        = 6000
+        w        = 100
         wstep    = constant w
         wscalar = use $ fromList Z [fromIntegral w]
         npixFF   = 256
