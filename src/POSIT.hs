@@ -48,20 +48,19 @@ p16_to_f32 (P16_ p) = bitcast f
                let -- decode regime
                    f0       = sign /= 0 ? ( 0x10000 - p, p )
                    T2 f1 s1 =
-                     if f0 .&. 0x4000 /= 0
-                       then while (\(T2 f' _ ) -> f' .&. 0x2000 /= 0)
-                                  (\(T2 f' s') -> T2 (f' .<<. 1) (s' + 0x1000000))
-                                  (T2 f0 0x3f800000)
-
-                       else while (\(T2 f' _ ) -> f' .&. 0x2000 == 0)
-                                  (\(T2 f' s') -> T2 (f' .<<. 1) (s' - 0x1000000))
-                                  (T2 f0 0x3e800000)
+                     let u = f0 .&. 0x4000 /= 0
+                         v = u ? (complement f0, f0)
+                         w = countLeadingZeros (v .<<. 2)
+                         x = 0x1000000 * w
+                     in
+                     T2 (f0 .<<. w) (u ? (0x3f800000 + x, 0x3e800000 - x))
 
                    -- decode exponent bit
+                   s2    = fromIntegral s1
                    shift =
                      if f1 .&. 0x1000 /= 0
-                       then s1 + 0x800000
-                       else s1
+                       then s2 + 0x800000
+                       else s2
                in
                sign .|. shift .|. ((fromIntegral f1 .&. 0xFFF) .<<. 11)
 
