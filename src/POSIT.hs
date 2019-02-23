@@ -53,16 +53,17 @@ p16_to_f32 (P16_ p) = bitcast f
                          w = countLeadingZeros (v .<<. 2)
                          x = 0x1000000 * w
                      in
-                     T2 (f0 .<<. w) (u ? (0x3f800000 + x, 0x3e800000 - x))
+                     T2 (fromIntegral f0 .<<. w)  -- XXX: requires 32-bits
+                        (u ? ( 0x3f800000 + x     -- XXX: must be signed
+                             , 0x3e800000 - x))
 
                    -- decode exponent bit
-                   s2    = fromIntegral s1
                    shift =
                      if f1 .&. 0x1000 /= 0
-                       then s2 + 0x800000
-                       else s2
+                       then s1 + 0x800000
+                       else s1
                in
-               sign .|. shift .|. ((fromIntegral f1 .&. 0xFFF) .<<. 11)
+               sign .|. fromIntegral shift .|. ((f1 .&. 0x0FFF) .<<. 11)
 
              -- exception cases NaN and zero
              else
@@ -74,7 +75,6 @@ p16_to_f32 (P16_ p) = bitcast f
 f32_to_p16 :: Exp Float -> Exp Posit16
 f32_to_p16 (bitcast -> f :: Exp Word32) = P16_ (fromIntegral p)
   where
-    p :: Exp Word32
     p = if f .&. 0x7f800000 == 0x7f800000
           -- ±infinity, NaN become NaR
           then 0x8000
@@ -105,7 +105,8 @@ f32_to_p16 (bitcast -> f :: Exp Word32) = P16_ (fromIntegral p)
                                     else p2
 
                              -- unrounded fraction
-                             p4 = (p3 .<<. s2) .|. (f .&. 0x7fffff)
+                             p4 :: Exp Word64       -- XXX: requires 64-bits
+                             p4 = (p3 .<<. s2) .|. (fromIntegral f .&. 0x7fffff)
 
                              b1 = 0x400 .<<. s2 -- bit n+1
                              p5 = if p4 .&. b1 /= 0 && (p4 .&. (b1-1) /= 0 || p4 .&. (b1 .<<. 1) /= 0)
