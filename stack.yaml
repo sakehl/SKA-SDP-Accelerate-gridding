@@ -11,17 +11,17 @@ packages:
 # Dependency packages to be pulled from upstream that are not in the resolver
 extra-deps:
 - git:    https://github.com/tmcdonell/accelerate.git
-  commit: dbb21b8f42e2051faf648d0a8718f9bf801a82d8
+  commit: d948d737683bc2f340b56319a4412505274502fc
 
 - git:    https://github.com/tmcdonell/accelerate-llvm.git
-  commit: a8370e918182654d76225c5a805e891a9fd67d0c
+  commit: a7a5c89a35f766dd14f6f2a982ea165bed0fcac1
   subdirs:
     - accelerate-llvm
     - accelerate-llvm-native
     - accelerate-llvm-ptx
 
 - git:    https://github.com/tmcdonell/accelerate-fft.git
-  commit: a8da5921f425e07c8536f778a92267e145eab016
+  commit: 782a873c000a89fd521e1ce4107daaf14bdc819d
 
 - git:    https://github.com/tmcdonell/lens-accelerate.git
   commit: b74eb8098735b1ad6cff3c5655af03d3f29b9f8e
