@@ -46,24 +46,24 @@ p16_to_f32 (P16_ p) = bitcast f
              -- decode |p|
              then
                let -- decode regime
-                   f0       = sign /= 0 ? ( 0x10000 - p, p )
-                   T2 f1 s1 =
-                     let u = f0 .&. 0x4000 /= 0
-                         v = u ? (complement f0, f0)
-                         w = countLeadingZeros (v .<<. 2)
-                         x = 0x1000000 * w
-                     in
-                     T2 (fromIntegral f0 .<<. w)  -- XXX: requires 32-bits
-                        (u ? ( 0x3f800000 + x     -- XXX: must be signed
-                             , 0x3e800000 - x))
+                   f0 = sign /= 0 ? ( 0x10000 - p, p )
+
+                   u  = f0 .&. 0x4000 /= 0
+                   v  = u ? (complement f0, f0)
+                   w  = countLeadingZeros (v .<<. 2)
+                   x  = 0x1000000 * w
+
+                   f1 = fromIntegral f0 .<<. w  -- XXX: requires 32-bits
+                   s1 = u ? ( 0x3f800000 + x    -- XXX: must be signed
+                            , 0x3e800000 - x)
 
                    -- decode exponent bit
-                   shift =
+                   s2 =
                      if f1 .&. 0x1000 /= 0
                        then s1 + 0x800000
                        else s1
                in
-               sign .|. fromIntegral shift .|. ((f1 .&. 0x0FFF) .<<. 11)
+               sign .|. fromIntegral s2 .|. ((f1 .&. 0x0FFF) .<<. 11)
 
              -- exception cases NaN and zero
              else
