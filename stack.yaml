@@ -26,7 +26,12 @@ extra-deps:
 - git:    https://github.com/tmcdonell/lens-accelerate.git
   commit: b74eb8098735b1ad6cff3c5655af03d3f29b9f8e
 
+- git: https://github.com/AccelerateHS/accelerate-io.git  
+  commit: 15c67bf66bf44bc0d6567b0d6f41338bffa178c8
+
 - llvm-hs-7.0.1
+
+- vector-0.12.0.1
 
 # Override default flag values for local packages and extra-deps
 flags:
