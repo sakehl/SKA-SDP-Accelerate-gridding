@@ -1,6 +1,8 @@
 {-# LANGUAGE ForeignFunctionInterface #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE AllowAmbiguousTypes #-}
+{-# LANGUAGE TypeFamilies #-}
 
 module Hdf5 where
 
@@ -14,8 +16,12 @@ import qualified Data.Vector.Storable as SV
 import qualified Data.Array.Accelerate.IO.Data.Vector.Storable as A
 import qualified Data.Array.Accelerate                         as A
 import qualified Data.Array.Accelerate.IO.Foreign.ForeignPtr   as A
+import qualified Data.Array.Accelerate.Array.Sugar             as A hiding(shape)
+import Data.Array.Accelerate.Data.Complex
 
-type Complex a = (a, a)
+import Debug.Trace
+--type Complex a = (a, a)
+type ComplexCDouble = Complex CDouble
 type ComplexDouble = Complex Double
 
 ---- Actual functionallity
@@ -32,13 +38,13 @@ foreign import ccall unsafe "readDatasetDouble"
     c_readDatasetDouble :: CString -> CString -> Ptr CDouble -> IO ()
 
 foreign import ccall unsafe "readDatasetComplex"
-    c_readDatasetComplex :: CString -> CString -> Ptr ComplexDouble -> IO ()
+    c_readDatasetComplex :: CString -> CString -> Ptr ComplexCDouble -> IO ()
 
 foreign import ccall unsafe "createDatasetDouble"
     c_createDatasetDouble :: CString -> CString -> CInt -> Ptr CInt -> Ptr CDouble -> IO ()
 
 foreign import ccall unsafe "createDatasetComplex"
-    c_createDatasetComplex :: CString -> CString -> CInt -> Ptr CInt -> Ptr ComplexDouble -> IO ()
+    c_createDatasetComplex :: CString -> CString -> CInt -> Ptr CInt -> Ptr ComplexCDouble -> IO ()
 
 
 
@@ -47,19 +53,19 @@ createh5File name' = do
     name <- newCString name'
     c_createh5File name
 
-createDatasetDouble :: String -> String -> CInt -> SV.Vector CInt -> SV.Vector CDouble -> IO ()
-createDatasetDouble = createDataset c_createDatasetDouble
-createDatasetComplex :: String -> String -> CInt -> SV.Vector CInt -> SV.Vector ComplexDouble -> IO ()
-createDatasetComplex = createDataset c_createDatasetComplex
+createDatasetDoubleV :: String -> String -> CInt -> SV.Vector CInt -> SV.Vector CDouble -> IO ()
+createDatasetDoubleV = createDatasetV c_createDatasetDouble
+createDatasetComplexV :: String -> String -> CInt -> SV.Vector CInt -> SV.Vector ComplexCDouble -> IO ()
+createDatasetComplexV = createDatasetV c_createDatasetComplex
 
-readDatasetDouble :: String -> String -> IO (SV.Vector CDouble)
-readDatasetDouble = readDataset c_readDatasetDouble
-readDatasetComplex :: String -> String -> IO (SV.Vector ComplexDouble)
-readDatasetComplex = readDataset c_readDatasetComplex
+readDatasetDoubleV :: String -> String -> IO (SV.Vector CDouble)
+readDatasetDoubleV = readDatasetV c_readDatasetDouble
+readDatasetComplexV :: String -> String -> IO (SV.Vector ComplexCDouble)
+readDatasetComplexV = readDatasetV c_readDatasetComplex
 
-createDataset :: Storable a => (CString -> CString -> CInt -> Ptr CInt -> Ptr a -> IO ()) -> 
+createDatasetV :: Storable a => (CString -> CString -> CInt -> Ptr CInt -> Ptr a -> IO ()) -> 
     String -> String -> CInt -> SV.Vector CInt -> SV.Vector a -> IO ()
-createDataset c_createDataset name' dataset' rank dims dat = do
+createDatasetV c_createDataset name' dataset' rank dims dat = do
     name <- newCString name'
     dataset <- newCString dataset'
     SV.unsafeWith dims $ \dimsp -> SV.unsafeWith dat $ \datap -> c_createDataset name dataset rank dimsp datap
@@ -83,9 +89,9 @@ getRankDataset name' dataset' = do
     dataset <- newCString dataset'
     c_getRankDataset name dataset
 
-readDataset :: Storable a => (CString -> CString -> Ptr a -> IO ()) 
+readDatasetV :: Storable a => (CString -> CString -> Ptr a -> IO ()) 
             -> String -> String -> IO (SV.Vector a)
-readDataset reader name' dataset' = do
+readDatasetV reader name' dataset' = do
     name <- newCString name'
     dataset <- newCString dataset'
     --Get the rank and dimensions, and calculate how many elements the dataset has
@@ -102,9 +108,10 @@ readDataset reader name' dataset' = do
     return $ SV.unsafeFromForeignPtr0 foreign_dat (fromIntegral total)
 
 {-
-readDataset2 :: (A.ForeignPtrs (A.EltRepr e) , Storable e, A.Elt e) => (CString -> CString -> Ptr e -> IO ()) 
+readDataset3 :: (Storable e, A.Elt e) =>
+             (CString -> CString -> Ptr e -> IO ())
             -> String -> String -> IO (A.Array A.DIM1 e)
-readDataset2 reader name' dataset' = do
+readDataset3 reader name' dataset' = do
     name <- newCString name'
     dataset <- newCString dataset'
     --Get the rank and dimensions, and calculate how many elements the dataset has
@@ -112,17 +119,19 @@ readDataset2 reader name' dataset' = do
     dims <- getDimsDataset name' dataset' rank
     let total = SV.product dims
     -- Allocate enough memory for the array
-    dat <- mallocArray (fromIntegral total)
+    dat <- mallocArray (fromIntegral total) :: IO (Ptr e)
     -- Get the data via the FFI binding
     reader name dataset dat
     -- Make it to a foreign pointer, this will make sure it gets freed eventually and we can get a Vector out of it
-    foreign_dat <- newForeignPtr finalizerFree dat :: IO (ForeignPtr e)
+    foreign_dat <- newForeignPtr finalizerFree (castPtr dat) :: IO (A.ForeignPtrs (A.EltRepr e))
     -- Give us back a vector :)
     --return $ SV.unsafeFromForeignPtr0 foreign_dat (fromIntegral total)
     let shape = A.Z A.:.  (fromIntegral total) :: (A.:.) A.Z Int
     return $ A.fromForeignPtrs shape foreign_dat
 -}
-readDataset2 :: (CString -> CString -> Ptr CDouble -> IO ()) 
+
+readDataset2 :: --(Storable e, A.Elt e, A.ForeignPtrs e ~ a) =>
+             (CString -> CString -> Ptr CDouble -> IO ())
             -> String -> String -> IO (A.Array A.DIM1 CDouble)
 readDataset2 reader name' dataset' = do
     name <- newCString name'
@@ -136,39 +145,41 @@ readDataset2 reader name' dataset' = do
     -- Get the data via the FFI binding
     reader name dataset dat
     -- Make it to a foreign pointer, this will make sure it gets freed eventually and we can get a Vector out of it
-    foreign_dat <- newForeignPtr finalizerFree (castPtr dat) :: IO (ForeignPtr Double)
+    foreign_dat <- newForeignPtr finalizerFree (castPtr dat) :: IO (A.ForeignPtrs (A.EltRepr CDouble))
     -- Give us back a vector :)
     --return $ SV.unsafeFromForeignPtr0 foreign_dat (fromIntegral total)
-    let shape = A.Z A.:.  (fromIntegral total) :: (A.:.) A.Z Int
+    let shape = A.Z A.:.  (fromIntegral total)
     return $ A.fromForeignPtrs shape foreign_dat
 
-readDatasetDoubleA ::  String -> String -> IO (A.Array A.DIM1 CDouble)
-readDatasetDoubleA name dataset = do
-    vector <- readDatasetDouble name dataset
-    let vector2 = SV.unsafeCast vector
-    let shape = A.Z A.:. SV.length vector2
-    return $ A.fromVectors shape vector2
+--readDatasetDouble ::  (A.Shape sh) => String -> String -> IO (A.Array sh Double)
+readDatasetDouble :: String -> String -> IO (A.Vector Double)
+readDatasetDouble name dataset = do
+    vector <- readDatasetDoubleV name dataset
+    let shape = A.Z A.:. SV.length vector
+    let vectorD = SV.unsafeCast vector
 
-instance (Storable a => Storable (a, a)) where
-    sizeOf _ = 2 * (sizeOf (undefined :: a))
-    alignment _ = alignment (undefined :: a)
-    peek ptr = do
-        let dptr = castPtr ptr
-        r <- peek dptr
-        i <- peekElemOff dptr 1
-        return (r,i)
-    poke ptr (r,i) = do
-        let dptr = castPtr ptr
-        poke dptr r
-        pokeElemOff dptr 1 i
-        return ()
+    --rank <- getRankDataset name dataset
+    --dims <- getDimsDataset name dataset rank
+    --let shape = A.listToShape . SV.toList . SV.map fromIntegral $ dims :: sh
+    return $ A.fromVectors shape vectorD
 
+readDatasetComplex ::  String -> String -> IO (A.Array A.DIM1 ComplexDouble)
+readDatasetComplex name dataset = do
+    vector <- readDatasetComplexV name dataset
+    let shape = A.Z A.:. SV.length vector
+    let vectorD = SV.unsafeCast vector
+    return $ A.fromVectors shape vectorD
 
-testDims :: SV.Vector CInt
-testDims = SV.fromList [3,3]
+createDatasetDouble :: (A.Shape sh) => String -> String -> A.Array sh Double -> IO ()
+createDatasetDouble name dataset dat= do
+    let dims = SV.map fromIntegral . SV.fromList . A.shapeToList . A.arrayShape $ dat
+    let rank = fromIntegral . SV.length $ dims
+    let vec = SV.unsafeCast . A.toVectors $ dat
+    createDatasetDoubleV name dataset rank dims vec
 
-testData :: SV.Vector CDouble
-testData = SV.generate 9 fromIntegral
-
-testDataC :: SV.Vector ComplexDouble
-testDataC = SV.generate 9 (\x -> let x' = fromIntegral x in (x', x'))
+createDatasetComplex :: (A.Shape sh) => String -> String -> A.Array sh ComplexDouble -> IO ()
+createDatasetComplex name dataset dat = do
+    let dims = SV.map fromIntegral . SV.fromList . A.shapeToList . A.arrayShape $ dat :: SV.Vector CInt
+    let rank = fromIntegral . SV.length $ dims
+    let vec = SV.unsafeCast . A.toVectors $ dat
+    createDatasetComplexV name dataset rank dims vec
