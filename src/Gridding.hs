@@ -22,9 +22,6 @@ import Prelude as P (fromIntegral, fromInteger, fromRational, String, return, (>
 
 import Control.Lens as L (_1, _2, _3, _4, _5)
 import Data.Maybe (fromJust, fromMaybe)
---import Data.Function.Memoize
-import System.IO.Unsafe (unsafePerformIO)
-import Debug.Trace
 
 data Kwargs = Kwargs { patHorShift :: Maybe Int
                      , patVerShift :: Maybe Int
@@ -629,11 +626,6 @@ padder array pad_width_x pad_width_y constant_val =
 
 c0 :: Exp Int
 c0 = constant 0
-
-addMessage :: String -> a -> a
-addMessage mes action =
-    let io = unsafePerformIO (P.putStrLn mes)
-    in P.seq action (P.seq io action)
 
 -- Check if the coordinates are out of bounds, and sets them to zero otherwise
 fixoutofbounds :: Elt a => Exp Int -> Exp Int -> Exp a -> Exp (Int, Int, a) -> Exp (Int, Int, a)
