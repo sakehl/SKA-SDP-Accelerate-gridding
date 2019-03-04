@@ -151,23 +151,24 @@ readDataset2 reader name' dataset' = do
     let shape = A.Z A.:.  (fromIntegral total)
     return $ A.fromForeignPtrs shape foreign_dat
 
---readDatasetDouble ::  (A.Shape sh) => String -> String -> IO (A.Array sh Double)
-readDatasetDouble :: String -> String -> IO (A.Vector Double)
+readDatasetDouble ::  (A.Shape sh) => String -> String -> IO (A.Array sh Double)
 readDatasetDouble name dataset = do
     vector <- readDatasetDoubleV name dataset
-    let shape = A.Z A.:. SV.length vector
     let vectorD = SV.unsafeCast vector
 
-    --rank <- getRankDataset name dataset
-    --dims <- getDimsDataset name dataset rank
-    --let shape = A.listToShape . SV.toList . SV.map fromIntegral $ dims :: sh
+    rank <- getRankDataset name dataset
+    dims <- getDimsDataset name dataset rank
+    let shape = A.listToShape . SV.toList . SV.map fromIntegral $ dims
     return $ A.fromVectors shape vectorD
 
-readDatasetComplex ::  String -> String -> IO (A.Array A.DIM1 ComplexDouble)
+readDatasetComplex :: (A.Shape sh) => String -> String -> IO (A.Array sh ComplexDouble)
 readDatasetComplex name dataset = do
     vector <- readDatasetComplexV name dataset
-    let shape = A.Z A.:. SV.length vector
     let vectorD = SV.unsafeCast vector
+
+    rank <- getRankDataset name dataset
+    dims <- getDimsDataset name dataset rank
+    let shape = A.listToShape . SV.toList . SV.map fromIntegral $ dims
     return $ A.fromVectors shape vectorD
 
 createDatasetDouble :: (A.Shape sh) => String -> String -> A.Array sh Double -> IO ()

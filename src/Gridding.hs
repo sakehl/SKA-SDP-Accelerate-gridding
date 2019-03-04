@@ -6,6 +6,8 @@
 
 module Gridding where
 
+import Types
+
 import Data.Array.Accelerate                              as A hiding (fromInteger, fromRational, fromIntegral)
 import qualified Data.Array.Accelerate                    as A (fromInteger, fromRational, fromIntegral)
 import Data.Array.Accelerate.Data.Complex                 as A
@@ -26,7 +28,7 @@ import Debug.Trace
 
 data Kwargs = Kwargs { patHorShift :: Maybe Int
                      , patVerShift :: Maybe Int
-                     , patTransMat :: Maybe (Acc (Matrix Double))
+                     , patTransMat :: Maybe (Acc (Matrix F))
                      , wstep :: Maybe Int
                      , qpx :: Maybe Int              -- The oversampling of the convolution kernel
                      , npixFF :: Maybe Int
@@ -34,30 +36,30 @@ data Kwargs = Kwargs { patHorShift :: Maybe Int
                      }
 
 data OtherImagingArgs = OtherImagingArgs
-                      { convolutionKernel :: Maybe ((Array DIM4 (Complex Double)))
+                      { convolutionKernel :: Maybe Kernel
                       , kernelCache :: Maybe KernelF
                       , kernelFunction :: Maybe KernelF
                       }
 
-type KernelF = Exp Double                            -- Field of view
-             -> Acc (Scalar Double)                  -- Baseline distance to the projection plane
-             -> Maybe (Exp Int)                      -- The id of the antenna 1
-             -> Maybe (Exp Int)                      -- The id of the antenna 2
-             -> Maybe (Exp Double)                   -- The time
-             -> Maybe (Exp Double)                   -- The frequency
+type KernelF = Exp F                                 -- Field of view
+             -> Acc (Scalar BaseLine)                -- Baseline distance to the projection plane
+             -> Maybe (Exp Antenna)                  -- The id of the antenna 1
+             -> Maybe (Exp Antenna)                  -- The id of the antenna 2
+             -> Maybe (Exp Time)                     -- The time
+             -> Maybe (Exp Frequency)                -- The frequency
              -> Kwargs                               -- Additional kernel arguments
-             -> Acc (Array DIM4 (Complex Double))    -- [Qpx,Qpx,s,s] shaped oversampled convolution kernels
+             -> Acc Kernel                           -- [Qpx,Qpx,s,s] shaped oversampled convolution kernels
 
-type WKernelF = Exp Double                            -- Field of view
-              -> Acc (Scalar Double)                  -- Baseline distance to the projection plane
+type WKernelF = Exp F                                 -- Field of view
+              -> Acc (Scalar BaseLine)                -- Baseline distance to the projection plane
               -> Kwargs                               -- Additional kernel arguments
-              -> Acc (Array DIM4 (Complex Double))    -- [Qpx,Qpx,s,s] shaped oversampled convolution kernels
+              -> Acc Kernel                           -- [Qpx,Qpx,s,s] shaped oversampled convolution kernels
 
-type AKernelF = Exp Double                            -- Field of view
-              -> Exp Int                              -- The id of the antenna
-              -> Exp Double                           -- The time
-              -> Exp Double                           -- The frequency
-              -> Acc (Matrix (Complex Double))        -- The a-kernel
+type AKernelF = Exp F                                 -- Field of view
+              -> Exp Antenna                          -- The id of the antenna
+              -> Exp Time                             -- The time
+              -> Exp Frequency                        -- The frequency
+              -> Acc (Matrix Visibility)              -- The a-kernel
 
 
 noArgs :: Kwargs
@@ -67,14 +69,14 @@ noOtherArgs :: OtherImagingArgs
 noOtherArgs = OtherImagingArgs Nothing Nothing Nothing
 -------------------------------
 -- Gridding Accelerate code
-type ImagingFunction = Double                                        -- (theta) Field of view size
-                     -> Int                                          -- (lam) Grid size
-                     -> Acc (Vector (Double, Double, Double))        -- (uvw) all the uvw baselines (coordinates) (lenght : n * (n-1))
-                     -> Acc (Vector (Int, Int, Double, Double))      -- (src) (Antenna 1, Antenna 2, The time (in MJD UTC), Frequency (Hz)) (lenght : n * (n-1))
-                     -> Acc (Vector (Complex Double))                -- (vis) visibility  (length n * (n-1))
-                     -> Kwargs                                       -- (kwargs) The additional options for the kernel
-                     -> OtherImagingArgs                             -- Some other arguments that not all imaging functions use
-                     -> Acc (Matrix (Complex Double))
+type ImagingFunction = F                                            -- (theta) Field of view size
+                     -> Int                                              -- (lam) Grid size
+                     -> Acc (Vector BaseLines)                           -- (uvw) all the uvw baselines (coordinates) (lenght : n * (n-1))
+                     -> Acc (Vector (Antenna, Antenna, Time, Frequency)) -- (src) (Antenna 1, Antenna 2, The time (in MJD UTC), Frequency (Hz)) (lenght : n * (n-1))
+                     -> Acc (Vector Visibility)                          -- (vis) visibility  (length n * (n-1))
+                     -> Kwargs                                           -- (kwargs) The additional options for the kernel
+                     -> OtherImagingArgs                                 -- Some other arguments that not all imaging functions use
+                     -> Acc (Matrix Visibility)
 
 -- # Simple imaging
 simple_imaging :: ImagingFunction
@@ -88,23 +90,23 @@ simple_imaging theta lam uvw src vis kwargs otargs =
         guv = fill (index2 ne ne) czero
     in grid guv p vis
 
-grid :: Acc (Matrix (Complex Double))                    -- Destination grid N x N of complex numbers
-     -> Acc (Vector (Double, Double, Double))            -- The uvw baselines, but between -.5 and .5
-     -> Acc (Vector (Complex Double))                    -- The visiblities
-     -> Acc (Matrix (Complex Double))
+grid :: Acc (Matrix Visibility)                    -- Destination grid N x N of complex numbers
+     -> Acc (Vector BaseLines)                     -- The uvw baselines, but between -.5 and .5
+     -> Acc (Vector Visibility)                    -- The visiblities
+     -> Acc (Matrix Visibility)
 grid a p v = permute (+) a (\i -> xy ! i) v
     where
         Z :. n :. _ = unlift (shape a) :: Z :. Exp Int :. Exp Int
         halfn = n `div` 2
-        nf = A.fromIntegral n :: Exp Double
+        nf = A.fromIntegral n :: Exp F
         xy = map gridxy p :: Acc (Vector DIM2)
 
         -- Note the order, python specified as a[y, x] += v
         -- We do the same. This is correct, first y then x in the index2 function
-        gridxy :: Exp (Double, Double, Double) -> Exp DIM2
-        gridxy (unlift -> (x, y, _ :: Exp Double)) = index2 (toGridCell y) (toGridCell x)
+        gridxy :: Exp BaseLines -> Exp DIM2
+        gridxy (unlift -> (x, y, _ :: Exp F)) = index2 (toGridCell y) (toGridCell x)
 
-        toGridCell :: Exp Double -> Exp Int
+        toGridCell :: Exp F -> Exp Int
         toGridCell f = halfn + floor (0.5 + nf * f)
 
 -- # Normal imaging
@@ -122,7 +124,7 @@ conv_imaging theta lam uvw src vis kwargs otargs =
 
 frac_coord :: Exp Int                                   -- The height/width
            -> Exp Int                                   -- Oversampling factor
-           -> Acc (Vector Double)                       -- a uvw baseline, but between -.5 and .5
+           -> Acc (Vector BaseLine)                     -- a uvw baseline, but between -.5 and .5
            -> Acc (Vector (Int, Int))
 frac_coord n qpx p =
     let halfn = n `div` 2
@@ -138,7 +140,7 @@ frac_coord n qpx p =
 
 frac_coords :: Exp (Int, Int)                           -- (Heigt, width) of the grid
             -> Exp Int                                  -- Oversampling factor
-            -> Acc (Vector (Double, Double, Double))    -- The uvw baselines, but between -.5 and .5
+            -> Acc (Vector BaseLines)                   -- The uvw baselines, but between -.5 and .5
             -> Acc (Vector (Int, Int, Int, Int))
 -- NOTE we should give it in height, width order.
 frac_coords (unlift -> (h, w) ) qpx p =
@@ -147,11 +149,11 @@ frac_coords (unlift -> (h, w) ) qpx p =
         (y, yf)   = unzip (frac_coord h qpx v)
     in zip4 x xf y yf
 
-convgrid :: Acc (Array DIM4 (Complex Double))        -- The oversampled convolution kernel
-         -> Acc (Matrix (Complex Double))            -- Destination grid N x N of complex numbers
-         -> Acc (Vector (Double, Double, Double))    -- The uvw baselines, but between -.5 and .5
-         -> Acc (Vector (Complex Double))            -- The visiblities
-         -> Acc (Matrix (Complex Double))
+convgrid :: Acc (Array DIM4 Visibility)        -- The oversampled convolution kernel
+         -> Acc (Matrix Visibility)            -- Destination grid N x N of complex numbers
+         -> Acc (Vector BaseLines)             -- The uvw baselines, but between -.5 and .5
+         -> Acc (Vector Visibility)            -- The visiblities
+         -> Acc (Matrix Visibility)
 convgrid gcf a p v =
     let Z :. qpx :. _ :. gh :. gw = unlift (shape gcf) :: Z :. Exp Int :. Exp Int :. Exp Int :. Exp Int
         Z :. height :. width = unlift (shape a) :: Z :. Exp Int :. Exp Int
@@ -184,21 +186,21 @@ convgrid gcf a p v =
                 x' = x ! id
             in index2 y' x'
 
-        getComplexAndAddOffset :: Exp DIM3 -> Exp (Int, Int, Int, Int, Complex Double) -> Exp (Int, Int, Complex Double)
+        getComplexAndAddOffset :: Exp DIM3 -> Exp (Int, Int, Int, Int, Visibility) -> Exp (Int, Int, Visibility)
         getComplexAndAddOffset
             (unlift . unindex3 -> (_, i, j) ::(Exp Int,Exp Int,Exp Int))
-            (unlift -> (x, xf, y, yf, vis)::(Exp Int,Exp Int,Exp Int,Exp Int,Exp (Complex Double))) =
+            (unlift -> (x, xf, y, yf, vis)::(Exp Int,Exp Int,Exp Int,Exp Int,Exp Visibility)) =
             lift ( x + j
                  , y + i
                  , vis * gcf ! lift (Z :. yf :. xf :. i :. j) )
     in permute (+) a indexer val
 
-convgrid2 :: Acc (Array DIM5 (Complex Double))        -- The oversampled convolution kernel
-          -> Acc (Matrix (Complex Double))            -- Destination grid N x N of complex numbers
-          -> Acc (Vector (Double, Double, Double))    -- The uvw baselines, but between -.5 and .5
-          -> Acc (Vector Int)                         -- *DIF* The wbin index of the convolution kernel
-          -> Acc (Vector (Complex Double))            -- The visiblities
-          -> Acc (Matrix (Complex Double))
+convgrid2 :: Acc (Array DIM5 Visibility)        -- The oversampled convolution kernel
+          -> Acc (Matrix Visibility)            -- Destination grid N x N of complex numbers
+          -> Acc (Vector BaseLines)             -- The uvw baselines, but between -.5 and .5
+          -> Acc (Vector Int)                   -- *DIF* The wbin index of the convolution kernel
+          -> Acc (Vector Visibility)            -- The visiblities
+          -> Acc (Matrix Visibility)
 convgrid2 gcf a p wbin v =
     let Z :. _ :. qpx :. _ :. gh :. gw = unlift (shape gcf) :: Z :. Exp Int :. Exp Int :. Exp Int :. Exp Int :. Exp Int
         Z :. height :. width = unlift (shape a) :: Z :. Exp Int :. Exp Int
@@ -231,10 +233,10 @@ convgrid2 gcf a p wbin v =
                 x' = x ! id
             in index2 y' x'
 
-        getComplexAndAddOffset :: Exp DIM3 -> Exp (Int, Int, Int, Int, Int, Complex Double) -> Exp (Int, Int, Complex Double)
+        getComplexAndAddOffset :: Exp DIM3 -> Exp (Int, Int, Int, Int, Int, Visibility) -> Exp (Int, Int, Visibility)
         getComplexAndAddOffset
             (unlift . unindex3 -> (_, i, j) ::(Exp Int,Exp Int,Exp Int))
-            (unlift -> (wbin, x, xf, y, yf, vis)::(Exp Int,Exp Int,Exp Int,Exp Int,Exp Int,Exp (Complex Double))) =
+            (unlift -> (wbin, x, xf, y, yf, vis)::(Exp Int,Exp Int,Exp Int,Exp Int,Exp Int,Exp Visibility)) =
             lift ( x + j
                  , y + i
                  , vis * gcf ! lift (Z :. wbin :. yf :. xf :. i :. j) )
@@ -262,11 +264,10 @@ w_cache_imaging theta lam uvw src vis
 
         p = map (`div3` constant lamf) uvw
         czero = constant 0
-        guv = fill (index2 ne ne) czero :: Acc (Matrix (Complex Double))
+        guv = fill (index2 ne ne) czero :: Acc (Matrix Visibility)
 
 
         -- We just make them all here, that's easiest for now
-        --thekernels = fromList (Z :. wstep) [0..] :: Vector Double
         (_,_,w) = unzip3 uvw
         roundedw = map (\w' -> wstep * round ( w' / A.fromIntegral wstep)) w
         maxw = the $ maximum roundedw
@@ -276,13 +277,13 @@ w_cache_imaging theta lam uvw src vis
 
         wbins = map (\rw' -> (rw' - constant cpumin) `div` wstep) roundedw
         
-        makeWKernel :: Int -> Acc (Array DIM5 (Complex Double))
+        makeWKernel :: Int -> Acc (Array DIM5 Visibility)
         makeWKernel i = let wbin = fromList Z $ (fromIntegral $ i * wstep_ + cpumin) : []
                         in use $ compiledMakeWKernel wbin
         
         compiledMakeWKernel = CPU.runN makeWKernel'
         
-        makeWKernel' :: Acc (Scalar Double) -> Acc (Array DIM5 (Complex Double))
+        makeWKernel' :: Acc (Scalar F) -> Acc (Array DIM5 Visibility)
         makeWKernel' wbin = make5D . map conjugate $ only_wcache (constant theta) wbin kwargs
 
         
@@ -313,11 +314,10 @@ aw_cache_imaging theta lam uvw src vis
 
         p = map (`div3` constant lamf) uvw
         czero = constant 0
-        guv = fill (index2 ne ne) czero :: Acc (Matrix (Complex Double))
+        guv = fill (index2 ne ne) czero :: Acc (Matrix Visibility)
 
 
         -- We just make them all here, that's easiest for now
-        --thekernels = fromList (Z :. wstep) [0..] :: Vector Double
         (_,_,w) = unzip3 uvw
         roundedw = map (\w' -> wstep * round ( w' / A.fromIntegral wstep)) w
         maxw = the $ maximum roundedw
@@ -328,12 +328,12 @@ aw_cache_imaging theta lam uvw src vis
 
         wbins = enumFromN (shape w) c0
     
-        makeAWKernel :: Int -> Acc (Array DIM5 (Complex Double))
+        makeAWKernel :: Int -> Acc (Array DIM5 Visibility)
         makeAWKernel i = 
             let i' = use $ fromList Z [i]
                 id = index1 (the i')
                 wbin = unit . A.fromIntegral $ roundedw ! id
-                (a1, a2, t, f) = unlift (src ! id) :: (Exp Int, Exp Int, Exp Double, Exp Double)
+                (a1, a2, t, f) = unlift (src ! id) :: (Exp Antenna, Exp Antenna, Exp Time, Exp Frequency)
             in compute $ make5D . map conjugate $ kernel_cache (constant theta) wbin (Just a1) (Just a2) (Just t) (Just f) kwargs
         make5D mat = let (Z :. yf :. xf :. y :. x) =  (unlift . shape) mat :: (Z :.Exp Int :. Exp Int :. Exp Int :. Exp Int)
                          newsh = lift (Z :. constant 1 :. yf :. xf :. y :. x) :: Exp DIM5
@@ -344,15 +344,15 @@ aw_cache_imaging theta lam uvw src vis
     
 ----------------------------------
 -- Processing the imaging functions
-do_imaging :: Double                                 -- Field of view size
+do_imaging :: F                                 -- Field of view size
            -> Int                                    -- Grid size
-           -> Vector (Double, Double, Double)        -- all the uvw baselines (coordinates) (lenght : n * (n-1))
-           -> Vector (Int, Int, Double, Double)      -- (Antenna 1, Antenna 2, The time (in MJD UTC), Frequency (Hz)) (lenght : n * (n-1))
-           -> Vector (Complex Double)                -- visibility  (length n * (n-1))
+           -> Vector BaseLines        -- all the uvw baselines (coordinates) (lenght : n * (n-1))
+           -> Vector (Antenna, Antenna, Time, Frequency)      -- (Antenna 1, Antenna 2, The time (in MJD UTC), Frequency (Hz)) (lenght : n * (n-1))
+           -> Vector Visibility                -- visibility  (length n * (n-1))
            -> ImagingFunction
            -> Kwargs
            -> OtherImagingArgs
-           -> Acc (Matrix Double,Matrix Double, Scalar Double)
+           -> Acc (Image,Image, Scalar F)
 do_imaging theta lam uvw src vis imgfn kwargs otargs =
     let
         -- TODO: if src == None: src = numpy.ndarray((len(vis), 0))
@@ -381,41 +381,41 @@ do_imaging theta lam uvw src vis imgfn kwargs otargs =
         res2 = pmaxv
     in lift (res0, res1, res2)
 
-mirror_uvw :: Acc (Vector (Double, Double, Double))                     -- all the uvw baselines (coordinates) (lenght : n * (n-1))
-           -> Acc (Vector (Complex Double))                             -- visibility  (length n * (n-1))
-           -> Acc (Vector ((Double, Double, Double), Complex Double))
+mirror_uvw :: Acc (Vector BaseLines)                              -- all the uvw baselines (coordinates) (lenght : n * (n-1))
+           -> Acc (Vector Visibility)                             -- visibility  (length n * (n-1))
+           -> Acc (Vector (BaseLines, Visibility))
 mirror_uvw uvw vis =
     let
         (u,v,w) = unzip3 uvw
         uvwvis = zip4 u v w vis
-        mirrorv o@(unlift -> (u,v,w,vis) :: (Exp Double, Exp Double, Exp Double, Exp (Complex Double))) =
+        mirrorv o@(unlift -> (u,v,w,vis) :: (Exp BaseLine, Exp BaseLine, Exp BaseLine, Exp Visibility)) =
             if v < 0
                 then lift ((-u, -v, -w), conjugate vis)
                 else lift ((u,v,w),vis)
     in map mirrorv uvwvis
 
-doweight :: Double                                                  -- Field of view size
-         -> Int                                                     -- Grid size
-         -> Acc (Vector (Double, Double, Double))                   -- all the uvw baselines (coordinates) (lenght : n * (n-1))
-         -> Acc (Vector (Complex Double))                           -- Array of ones (same size as visibility  (length n * (n-1)))
-         -> Acc (Vector (Complex Double))
+doweight :: F                                                  -- Field of view size
+         -> Int                                                -- Grid size
+         -> Acc (Vector BaseLines)                             -- all the uvw baselines (coordinates) (lenght : n * (n-1))
+         -> Acc (Vector Visibility)                            -- Array of ones (same size as visibility  (length n * (n-1)))
+         -> Acc (Vector Visibility)
 doweight theta lam p v =
     let
         n = P.round(theta * lamf)
         lamf = fromIntegral lam
         ne = constant n :: Exp Int
         lamfe = constant lamf
-        gw = fill (index2 ne ne) 0 :: Acc (Matrix Double)
+        gw = fill (index2 ne ne) 0 :: Acc (Matrix F)
         coords = frac_coords (lift (ne, ne)) 1 (map (`div3` lamfe) p)
         (x,_,y,_) = unzip4 coords
-        ones  = fill (shape x) 1 :: Acc (Vector Double)
+        ones  = fill (shape x) 1 :: Acc (Vector F)
         xyindex = zipWith index2 y x
         weights = permute (+) gw (\id -> xyindex ! id) ones
 
         newv = imap (\id v -> v / lift (weights ! (xyindex ! id) :+ 0)) v
     in newv
 
-make_grid_hermitian :: Acc (Matrix (Complex Double)) -> Acc (Matrix (Complex Double))
+make_grid_hermitian :: Acc (Matrix Visibility) -> Acc (Matrix Visibility)
 make_grid_hermitian guv = let
         sh = shape guv
         Z :. n :. _ = unlift sh :: Z :. Exp Int :. Exp Int
@@ -447,16 +447,16 @@ w_kernel theta w
         npixFF = constant $ fromJust npixFF'
         npixKern = constant $ fromJust npixKern'
         qpx = constant $ fromJust qpx'
-        (l, m) = unlift $ kernel_coordinates npixFF theta kwargs :: (Acc (Matrix Double), Acc (Matrix Double))
+        (l, m) = unlift $ kernel_coordinates npixFF theta kwargs :: (Acc (Matrix BaseLine), Acc (Matrix BaseLine))
         kern = w_kernel_function l m w
     in kernel_oversample kern npixFF qpx npixKern
 
-kernel_coordinates :: Exp Int -> Exp Double -> Kwargs -> Acc ((Matrix Double), (Matrix Double))
+kernel_coordinates :: Exp Int -> Exp F -> Kwargs -> Acc ((Matrix BaseLine), (Matrix BaseLine))
 kernel_coordinates n theta kwargs =
     let
         dl = (constant . fromIntegral . fromMaybe 0 . patHorShift) kwargs
         dm = (constant . fromIntegral . fromMaybe 0 . patVerShift) kwargs
-        (l,m) = unlift $ coordinates2 n :: (Acc (Matrix Double), Acc (Matrix Double))
+        (l,m) = unlift $ coordinates2 n :: (Acc (Matrix BaseLine), Acc (Matrix BaseLine))
         lm1 = map (liftTupf (*theta) (*theta)) (zip l m)
         lm2 = case patTransMat kwargs of
             Nothing -> lm1
@@ -467,7 +467,7 @@ kernel_coordinates n theta kwargs =
         lm3 = map (liftTupf (+dl) (+dm)) lm2
     in lift $ unzip lm3
 
-coordinates2 :: Exp Int -> Acc (Matrix Double, Matrix Double)
+coordinates2 :: Exp Int -> Acc (Matrix BaseLine, Matrix BaseLine)
 coordinates2 n =
     let
         n2 = n `div` 2
@@ -475,16 +475,16 @@ coordinates2 n =
         sh2 = index2 n n
         start = A.fromIntegral (-n2) * step
         step = 1 / A.fromIntegral n
-        base = enumFromStepN sh start step :: Acc (Vector Double)
+        base = enumFromStepN sh start step :: Acc (Vector BaseLine)
         samecolumns = replicate (lift (Z :. n :. All)) base
         samerows = replicate (lift (Z :. All :. n)) base
     in lift (samecolumns, samerows)
 
 
-w_kernel_function :: Acc (Matrix Double)              -- Horizontal image coordinates
-                  -> Acc (Matrix Double)              -- Vertical image coordinates
-                  -> Acc (Scalar Double)              -- Baseline distance to the projection plane
-                  -> Acc (Matrix (Complex Double))    -- N x N array with the far field
+w_kernel_function :: Acc (Matrix BaseLine)              -- Horizontal image coordinates
+                  -> Acc (Matrix BaseLine)              -- Vertical image coordinates
+                  -> Acc (Scalar BaseLine)              -- Baseline distance to the projection plane
+                  -> Acc (Matrix Visibility)    -- N x N array with the far field
 w_kernel_function l m w' =
     let r2 = zipWith (\x y -> x*x + y*y) l m
     {-  dl and dm seem to be always zero anyway in the reference code
@@ -499,11 +499,11 @@ w_kernel_function l m w' =
         cp = map (\ph' -> (exp . lift) (0 :+ 2 * pi * w * ph') ) ph
     in cp
 
-kernel_oversample :: Acc (Matrix (Complex Double))       -- Far field pattern
+kernel_oversample :: Acc (Matrix Visibility)             -- Far field pattern
                   -> Exp Int                             -- Image size without oversampling
                   -> Exp Int                             -- Factor to oversample by -- there will be Qpx x Qpx convolution arl
                   -> Exp Int                             -- Size of convolution function to extract
-                  -> Acc (Array DIM4 (Complex Double))   -- array of shape [ov, ou, v, u], e.g. with sub-pixel
+                  -> Acc Kernel                          -- array of shape [ov, ou, v, u], e.g. with sub-pixel
 kernel_oversample ff n qpx s =
     let
         -- Pad the far field to the required pixel size
@@ -512,9 +512,9 @@ kernel_oversample ff n qpx s =
         af = ifft padff
     in extract_oversampled af qpx s
 
-pad_mid :: Acc (Matrix (Complex Double))    -- The input far field. Should be smaller than NxN
+pad_mid :: Acc (Matrix Visibility)    -- The input far field. Should be smaller than NxN
         -> Exp Int                          -- The desired far field size
-        -> Acc (Matrix (Complex Double))    -- The far field, NxN
+        -> Acc (Matrix Visibility)    -- The far field, NxN
 pad_mid ff n =
     let
         Z :. n0 :. n0w = (unlift . shape) ff :: Z :. Exp Int :. Exp Int
@@ -523,10 +523,10 @@ pad_mid ff n =
         padded = padder ff pad_width pad_width 0
     in result
 
-extract_oversampled :: Acc (Matrix (Complex Double))        -- grid from which to extract
+extract_oversampled :: Acc (Matrix Visibility)        -- grid from which to extract
                     -> Exp Int                              -- oversampling factor
                     -> Exp Int                              -- size of section
-                    -> Acc (Array DIM4 (Complex Double))    -- Return the oversampled kernels with shape qpx x qpx x n x n
+                    -> Acc (Array DIM4 Visibility)    -- Return the oversampled kernels with shape qpx x qpx x n x n
 extract_oversampled a qpx n =
     let
         -- In contrast to the python code, we return all the oversampled kernels at once, instead of one at a time
@@ -579,7 +579,7 @@ aw_kernel_fn a_kernel_fn w_kernel_fn' theta w a1' a2' t' f'
 
 -- the kernels for Aw-gridding will normally be chosen to /not/ overflow the borders 
 -- Thus we chose the simpler method
-convolve2d :: Acc (Matrix (Complex Double)) -> Acc (Matrix (Complex Double)) -> Acc (Matrix (Complex Double))
+convolve2d :: Acc (Matrix Visibility) -> Acc (Matrix Visibility) -> Acc (Matrix Visibility)
 convolve2d a1 a2 = 
     let
         --Actually I expect 
@@ -595,15 +595,15 @@ convolve2d a1 a2 =
 
 ----------------------
 -- Fourier transformations
-fft :: Acc (Matrix (Complex Double)) -> Acc (Matrix (Complex Double))
+fft :: Acc (Matrix Visibility) -> Acc (Matrix Visibility)
 fft = shift2D . fft2D Forward . ishift2D
 
-ifft :: Acc (Matrix (Complex Double)) -> Acc (Matrix (Complex Double))
+ifft :: Acc (Matrix Visibility) -> Acc (Matrix Visibility)
 ifft = shift2D . fft2D Inverse . ishift2D
 
 ------------------------
 -- Helper functions
-div3 :: Exp (Double, Double, Double) -> Exp Double -> Exp (Double, Double, Double)
+div3 :: Exp BaseLines -> Exp F -> Exp BaseLines
 div3 (unlift -> (a,b,c)) x = lift (a / x, b / x, c / x)
 
 myfor :: Int -> (Int -> a -> a) -> a -> a
