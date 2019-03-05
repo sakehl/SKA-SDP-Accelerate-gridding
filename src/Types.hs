@@ -17,3 +17,7 @@ type Frequency = F
 type Image = Matrix F
 
 type Kernel = Array DIM4 Visibility
+
+type WKernel = Array DIM4 Visibility
+type AKernel = Array DIM2 Visibility
+type AWKernel = Array DIM2 Visibility
