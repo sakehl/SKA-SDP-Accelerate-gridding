@@ -289,7 +289,8 @@ processOne
             a1 = slice akerns (lift (Z :. a1index :. All :. All))
             a2 = slice akerns (lift (Z :. a2index :. All :. All))
             w  = slice wkerns (lift (Z :. wbin :. All :. All :. All :. All))
-            awkern = aw_kernel_fn2 yf xf w a1 a2
+            -- NOTE, the conjugate normally happens in imaging function, but it is confinient to do it here.
+            awkern = map conjugate $ aw_kernel_fn2 yf xf w a1 a2
             
             --Start at the right coordinates
             startx = x - halfgw
@@ -372,50 +373,27 @@ w_cache_imaging kernops@KernelOptions{wstep = wstep'}
 -- Imaging with aw-caches
 aw_imaging :: KernelOptions -> OtherImagingArgs -> ImagingFunction
 aw_imaging kernops@KernelOptions{wstep = wstep', qpx = qpx'}
-  otargs@OtherImagingArgs{kernelCache = kernel_cache'}
+  otargs@OtherImagingArgs{akernels = akernels'
+                         ,wkernels = wkernels'}
   theta lam uvw src vis =
     let
-        -- They use a LRU cache for the function, to memoize the results. Maybe usefull. Not sure yet.
-        -- So maybe use LRU cache implementation (lrucache package) or memoization (memoize package)
-        -- For now we just call the function.
-        kernel_cache = fromJust kernel_cache'
-        only_wcache theta w kernops = kernel_cache theta w Nothing Nothing Nothing Nothing kernops
-        wstep_ = fromMaybe 2000 wstep'
-        wstep = constant $ wstep_
+        akernels = fromJust akernels'
+        (wkernels, wbins) = fromJust wkernels'
 
         lamf = fromIntegral lam
-        n = P.round(theta * lamf)
-        ne = constant n
+        n = constant . P.round $ theta * lamf
 
         p = map (`div3` constant lamf) uvw
         czero = constant 0
-        guv = fill (index2 ne ne) czero :: Acc (Matrix Visibility)
-
+        guv = fill (index2 n n) czero :: Acc (Matrix Visibility)
 
         -- We just make them all here, that's easiest for now
         (_,_,w) = unzip3 uvw
-        roundedw = map (\w' -> wstep * round ( w' / A.fromIntegral wstep)) w
-        maxw = the $ maximum roundedw
-        minw = the $ minimum roundedw
-        l = length roundedw
-        steps = ((maxw - minw) `div` wstep ) + 1
-        (cpumin, cpumax, cpusteps, cpul) = CPU.run (unit $ lift (minw, maxw, steps, l)) `indexArray` Z
-
-        wbins = enumFromN (shape w) c0
-    
-        makeAWKernel :: Int -> Acc (Array DIM5 Visibility)
-        makeAWKernel i = 
-            let i' = use $ fromList Z [i]
-                id = index1 (the i')
-                wbin = unit . A.fromIntegral $ roundedw ! id
-                (a1, a2, t, f) = unlift (src ! id) :: (Exp Antenna, Exp Antenna, Exp Time, Exp Frequency)
-            in compute $ make5D . map conjugate $ kernel_cache (constant theta) wbin (Just a1) (Just a2) (Just t) (Just f) kernops
-        make5D mat = let (Z :. yf :. xf :. y :. x) =  (unlift . shape) mat :: (Z :.Exp Int :. Exp Int :. Exp Int :. Exp Int)
-                         newsh = lift (Z :. constant 1 :. yf :. xf :. y :. x) :: Exp DIM5
-                     in reshape newsh mat
-
-        thekernels = myfor (cpul - 1) (\i old -> concatOn _5 (makeAWKernel i) old) (makeAWKernel (cpul - 1))
-    in convgrid2 thekernels guv p wbins vis
+        closestw = map (findClosest (use wbins)) w
+        (a1, a2, _, _) = unzip4 src
+        index = zip3 closestw a1 a2
+        --Normally we conjugate the kernel here, but we do it later on in the convgrid3 (or processOne) function somewhere
+    in convgrid3 (use wkernels) (use akernels) guv p index vis
     
 ----------------------------------
 -- Processing the imaging functions
@@ -727,3 +705,19 @@ fixoutofbounds maxx maxy defv
         defy = c0 :: Exp Int
         def = lift (defx, defy, defv)
     in if outofbounds then def else old
+
+
+
+findClosest :: (Elt a, Num a, Ord a) => Acc (Vector a) -> Exp a -> Exp Int
+findClosest ws w =
+    let cmp (unlift -> (min, max) :: (Exp Int, Exp Int)) = (max - min) `div` 2 >= 1
+        f (unlift -> (min, max) :: (Exp Int, Exp Int)) = 
+            let id = (max + min) `div` 2
+            in if w > ws !! id 
+                then lift (id, max)
+                else lift (min, id)
+        Z :. max = unlift . shape $ ws :: Z :. Exp Int  
+        minmax = lift (0 :: Exp Int, max)
+        
+        (r1, r2) = unlift . while cmp f $ minmax :: (Exp Int, Exp Int)
+    in if abs (w - ws !! r1) < abs (w - ws !! r2) then r1 else r2
