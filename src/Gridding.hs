@@ -23,17 +23,20 @@ import Prelude as P (fromIntegral, fromInteger, fromRational, String, return, (>
 import Control.Lens as L (_1, _2, _3, _4, _5)
 import Data.Maybe (fromJust, fromMaybe)
 
-data Kwargs = Kwargs { patHorShift :: Maybe Int
-                     , patVerShift :: Maybe Int
-                     , patTransMat :: Maybe (Acc (Matrix F))
-                     , wstep :: Maybe Int
-                     , qpx :: Maybe Int              -- The oversampling of the convolution kernel
-                     , npixFF :: Maybe Int
-                     , npixKern :: Maybe Int         -- Kernel size (if it is same size in x and y)
-                     }
+data KernelOptions = KernelOptions 
+    { patHorShift :: Maybe Int
+    , patVerShift :: Maybe Int
+    , patTransMat :: Maybe (Acc (Matrix F))
+    , wstep :: Maybe Int
+    , qpx :: Maybe Int              -- The oversampling of the convolution kernel
+    , npixFF :: Maybe Int
+    , npixKern :: Maybe Int         -- Kernel size (if it is same size in x and y)
+    }
 
 data OtherImagingArgs = OtherImagingArgs
                       { convolutionKernel :: Maybe Kernel
+                      , akernels :: Maybe (Array DIM3 Visibility)
+                      , wkernels :: Maybe ((Array DIM5 Visibility, Vector BaseLine))
                       , kernelCache :: Maybe KernelF
                       , kernelFunction :: Maybe KernelF
                       }
@@ -44,12 +47,12 @@ type KernelF = Exp F                                 -- Field of view
              -> Maybe (Exp Antenna)                  -- The id of the antenna 2
              -> Maybe (Exp Time)                     -- The time
              -> Maybe (Exp Frequency)                -- The frequency
-             -> Kwargs                               -- Additional kernel arguments
+             -> KernelOptions                        -- Additional kernel arguments
              -> Acc Kernel                           -- [Qpx,Qpx,s,s] shaped oversampled convolution kernels
 
 type WKernelF = Exp F                                 -- Field of view
               -> Acc (Scalar BaseLine)                -- Baseline distance to the projection plane
-              -> Kwargs                               -- Additional kernel arguments
+              -> KernelOptions                        -- Additional kernel arguments
               -> Acc Kernel                           -- [Qpx,Qpx,s,s] shaped oversampled convolution kernels
 
 type AKernelF = Exp F                                 -- Field of view
@@ -59,25 +62,23 @@ type AKernelF = Exp F                                 -- Field of view
               -> Acc (Matrix Visibility)              -- The a-kernel
 
 
-noArgs :: Kwargs
-noArgs = Kwargs Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+noArgs :: KernelOptions
+noArgs = KernelOptions Nothing Nothing Nothing Nothing Nothing Nothing Nothing
 
 noOtherArgs :: OtherImagingArgs
-noOtherArgs = OtherImagingArgs Nothing Nothing Nothing
+noOtherArgs = OtherImagingArgs Nothing Nothing Nothing Nothing Nothing
 -------------------------------
 -- Gridding Accelerate code
-type ImagingFunction = F                                            -- (theta) Field of view size
+type ImagingFunction = F                                                 -- (theta) Field of view size
                      -> Int                                              -- (lam) Grid size
                      -> Acc (Vector BaseLines)                           -- (uvw) all the uvw baselines (coordinates) (lenght : n * (n-1))
                      -> Acc (Vector (Antenna, Antenna, Time, Frequency)) -- (src) (Antenna 1, Antenna 2, The time (in MJD UTC), Frequency (Hz)) (lenght : n * (n-1))
                      -> Acc (Vector Visibility)                          -- (vis) visibility  (length n * (n-1))
-                     -> Kwargs                                           -- (kwargs) The additional options for the kernel
-                     -> OtherImagingArgs                                 -- Some other arguments that not all imaging functions use
                      -> Acc (Matrix Visibility)
 
 -- # Simple imaging
 simple_imaging :: ImagingFunction
-simple_imaging theta lam uvw src vis kwargs otargs =
+simple_imaging theta lam uvw src vis =
     let lamf = fromIntegral lam
         n = P.round(theta * lamf)
         ne = constant n
@@ -107,10 +108,9 @@ grid a p v = permute (+) a (\i -> xy ! i) v
         toGridCell f = halfn + floor (0.5 + nf * f)
 
 -- # Normal imaging
-conv_imaging :: ImagingFunction
-conv_imaging theta lam uvw src vis kwargs otargs =
-    let kv = fromJust $ convolutionKernel otargs
-        lamf = fromIntegral lam
+conv_imaging :: Kernel -> ImagingFunction
+conv_imaging kv theta lam uvw src vis =
+    let lamf = fromIntegral lam
         n = P.round(theta * lamf)
         ne = constant n
 
@@ -239,19 +239,97 @@ convgrid2 gcf a p wbin v =
                  , vis * gcf ! lift (Z :. wbin :. yf :. xf :. i :. j) )
     in permute (+) a indexer val
 
+convgrid3 :: Acc (Array DIM5 Visibility)        -- The oversampled convolution w-kernel
+          -> Acc (Array DIM3 Visibility)        -- The a-kernels
+          -> Acc (Matrix Visibility)            -- Destination grid N x N of complex numbers
+          -> Acc (Vector BaseLines)             -- The uvw baselines, but between -.5 and .5
+          -> Acc (Vector (Int, Int, Int))       -- *DIF* The wbin index of the convolution kernel and the index of the a-kernels
+          -> Acc (Vector Visibility)            -- The visiblities
+          -> Acc (Matrix Visibility)
+convgrid3 wkerns akerns a p index v =
+    let Z :. _ :. qpx :. _ :. gh :. gw = unlift (shape wkerns) :: Z :. Exp Int :. Exp Int :. Exp Int :. Exp Int :. Exp Int
+        Z :. height :. width = unlift (shape a) :: Z :. Exp Int :. Exp Int
+        Z :. n = unlift (shape v) :: Z :. Exp Int
+        halfgh = gh `div` 2
+        halfgw = gw `div` 2
+
+        --Gather the coords, make them into ints and fractions and zip with visability
+        coords = frac_coords (lift (height, width)) qpx p
+        (cx, cxf, cy, cyf) = unzip4 coords
+        dat = zip5 cx cxf cy cyf v
+
+        -- We reuse this on a lot, so compile it
+        processer = CPU.runN processOne
+
+        index0 i = CPU.run . unit $ index !! i
+        dat0 i = CPU.run . unit $ dat !! i
+        wkerns' = CPU.run wkerns
+        akerns' = CPU.run akerns
+        a' = CPU.run a
+        n' = P.head . toList .CPU.run . unit $  n
+
+        processi i = processer (index0 (constant i)) (dat0 (constant i)) wkerns' akerns'
+
+        result = myfor n' processi a'
+        
+    in (use result)
+
+processOne :: Acc (Scalar (Int, Int, Int)) -> Acc (Scalar(Int, Int, Int, Int, Visibility)) -> Acc (Array DIM5 Visibility) -> Acc (Array DIM3 Visibility) -> Acc (Matrix Visibility) -> Acc (Matrix Visibility) 
+processOne
+    (unlift . the -> (wbin, a1index, a2index) :: (Exp Int, Exp Int, Exp Int))
+    (unlift . the -> (x, xf, y, yf, vis)::(Exp Int,Exp Int,Exp Int,Exp Int,Exp Visibility))
+    wkerns akerns a =
+        let Z :. _ :. _ :. _ :. gh :. gw = unlift (shape wkerns) :: Z :. Exp Int :. Exp Int :. Exp Int :. Exp Int :. Exp Int
+            Z :. height :. width = unlift (shape a) :: Z :. Exp Int :. Exp Int
+            halfgh = gh `div` 2
+            halfgw = gw `div` 2
+            cc0 = (lift (constant 0.0 :+ constant 0.0))
+            
+            --Get the right aw kernel
+            a1 = slice akerns (lift (Z :. a1index :. All :. All))
+            a2 = slice akerns (lift (Z :. a2index :. All :. All))
+            w  = slice wkerns (lift (Z :. wbin :. All :. All :. All :. All))
+            awkern = aw_kernel_fn2 yf xf w a1 a2
+            
+            --Start at the right coordinates
+            startx = x - halfgw
+            starty = y - halfgh
+            vals = fill (shape awkern) (lift (startx, starty, vis))
+            mappedvals = imap getComplexAndAddOffset vals
+            --Fix the bounds
+            fixer = fixoutofbounds width height cc0
+            fixedBounds = map fixer mappedvals
+            (xs,ys, val) = unzip3 fixedBounds
+
+            indexer id =
+                let y' = ys ! id
+                    x' = xs ! id
+                in index2 y' x'
+
+            getComplexAndAddOffset :: Exp DIM2 -> Exp (Int, Int, Visibility) -> Exp (Int, Int, Visibility)
+            getComplexAndAddOffset (unlift . unindex2 -> (i, j)::(Exp Int,Exp Int))
+                (unlift -> (x, y, vis)::(Exp Int,Exp Int,Exp Visibility)) =
+                    lift ( x + j
+                         , y + i
+                         , vis * awkern ! lift (Z :. i :. j) )
+
+
+        in permute (+) a indexer val
+
 -- Imaging with a w kernel TODO: It differs from the normal implementation atm, it will only work with w-kernels, not aw-kernels
-w_cache_imaging :: ImagingFunction
-w_cache_imaging theta lam uvw src vis
- kwargs@Kwargs{wstep = wstep', qpx = qpx'}
- otargs@OtherImagingArgs{kernelCache = kernel_cache', kernelFunction = kernel_fn'} =
+w_cache_imaging :: KernelOptions -> OtherImagingArgs -> ImagingFunction
+w_cache_imaging kernops@KernelOptions{wstep = wstep'}
+  otargs@OtherImagingArgs{kernelCache = kernel_cache', kernelFunction = kernel_fn'} 
+  theta lam uvw src vis
+  =
     let
         -- They use a LRU cache for the function, to memoize the results. Maybe usefull. Not sure yet.
         -- So maybe use LRU cache implementation (lrucache package) or memoization (memoize package)
         -- For now we just call the function.
-        default_kernelf theta w _ _ _ _ kwargs = w_kernel theta w kwargs
+        default_kernelf theta w _ _ _ _ kernops = w_kernel theta w kernops
         kernel_fn    = fromMaybe default_kernelf kernel_fn'
         kernel_cache = fromMaybe kernel_fn kernel_cache'
-        only_wcache theta w kwargs = kernel_cache theta w Nothing Nothing Nothing Nothing kwargs
+        only_wcache theta w kernops = kernel_cache theta w Nothing Nothing Nothing Nothing kernops
         wstep_ = fromMaybe 2000 wstep'
         wstep = constant $ wstep_
 
@@ -281,7 +359,7 @@ w_cache_imaging theta lam uvw src vis
         compiledMakeWKernel = CPU.runN makeWKernel'
         
         makeWKernel' :: Acc (Scalar F) -> Acc (Array DIM5 Visibility)
-        makeWKernel' wbin = make5D . map conjugate $ only_wcache (constant theta) wbin kwargs
+        makeWKernel' wbin = make5D . map conjugate $ only_wcache (constant theta) wbin kernops
 
         
         make5D mat = let (Z :. yf :. xf :. y :. x) =  (unlift . shape) mat :: (Z :.Exp Int :. Exp Int :. Exp Int :. Exp Int)
@@ -292,16 +370,16 @@ w_cache_imaging theta lam uvw src vis
     in convgrid2 (use thekernels) guv p wbins vis
 
 -- Imaging with aw-caches
-aw_cache_imaging :: ImagingFunction
-aw_cache_imaging theta lam uvw src vis
- kwargs@Kwargs{wstep = wstep', qpx = qpx'}
- otargs@OtherImagingArgs{kernelCache = kernel_cache'} =
+aw_imaging :: KernelOptions -> OtherImagingArgs -> ImagingFunction
+aw_imaging kernops@KernelOptions{wstep = wstep', qpx = qpx'}
+  otargs@OtherImagingArgs{kernelCache = kernel_cache'}
+  theta lam uvw src vis =
     let
         -- They use a LRU cache for the function, to memoize the results. Maybe usefull. Not sure yet.
         -- So maybe use LRU cache implementation (lrucache package) or memoization (memoize package)
         -- For now we just call the function.
         kernel_cache = fromJust kernel_cache'
-        only_wcache theta w kwargs = kernel_cache theta w Nothing Nothing Nothing Nothing kwargs
+        only_wcache theta w kernops = kernel_cache theta w Nothing Nothing Nothing Nothing kernops
         wstep_ = fromMaybe 2000 wstep'
         wstep = constant $ wstep_
 
@@ -331,7 +409,7 @@ aw_cache_imaging theta lam uvw src vis
                 id = index1 (the i')
                 wbin = unit . A.fromIntegral $ roundedw ! id
                 (a1, a2, t, f) = unlift (src ! id) :: (Exp Antenna, Exp Antenna, Exp Time, Exp Frequency)
-            in compute $ make5D . map conjugate $ kernel_cache (constant theta) wbin (Just a1) (Just a2) (Just t) (Just f) kwargs
+            in compute $ make5D . map conjugate $ kernel_cache (constant theta) wbin (Just a1) (Just a2) (Just t) (Just f) kernops
         make5D mat = let (Z :. yf :. xf :. y :. x) =  (unlift . shape) mat :: (Z :.Exp Int :. Exp Int :. Exp Int :. Exp Int)
                          newsh = lift (Z :. constant 1 :. yf :. xf :. y :. x) :: Exp DIM5
                      in reshape newsh mat
@@ -347,10 +425,8 @@ do_imaging :: F                                 -- Field of view size
            -> Vector (Antenna, Antenna, Time, Frequency)      -- (Antenna 1, Antenna 2, The time (in MJD UTC), Frequency (Hz)) (lenght : n * (n-1))
            -> Vector Visibility                -- visibility  (length n * (n-1))
            -> ImagingFunction
-           -> Kwargs
-           -> OtherImagingArgs
            -> Acc (Image,Image, Scalar F)
-do_imaging theta lam uvw src vis imgfn kwargs otargs =
+do_imaging theta lam uvw src vis imgfn =
     let
         -- TODO: if src == None: src = numpy.ndarray((len(vis), 0))
         len = arrayShape vis
@@ -365,10 +441,10 @@ do_imaging theta lam uvw src vis imgfn kwargs otargs =
         wt = doweight theta lam uvw1 ones
 
         -- Make image
-        cdrt = imgfn theta lam uvw1 src0 (zipWith (*) wt vis1) kwargs otargs
+        cdrt = imgfn theta lam uvw1 src0 (zipWith (*) wt vis1)
         drt = (map real . ifft . make_grid_hermitian) cdrt
         -- Make point spread function
-        c = imgfn theta lam uvw1 src0 wt kwargs otargs
+        c = imgfn theta lam uvw1 src0 wt
         psf =  (map real . ifft . make_grid_hermitian) c
         -- Normalise
         pmaxv = (maximum . flatten) psf
@@ -439,23 +515,23 @@ make_grid_hermitian guv = let
 -- Kernels
 w_kernel :: WKernelF
 w_kernel theta w
-    kwargs@Kwargs{npixFF = npixFF', npixKern = npixKern', qpx = qpx'} =
+    kernops@KernelOptions{npixFF = npixFF', npixKern = npixKern', qpx = qpx'} =
     let
         npixFF = constant $ fromJust npixFF'
         npixKern = constant $ fromJust npixKern'
         qpx = constant $ fromJust qpx'
-        (l, m) = unlift $ kernel_coordinates npixFF theta kwargs :: (Acc (Matrix BaseLine), Acc (Matrix BaseLine))
+        (l, m) = unlift $ kernel_coordinates npixFF theta kernops :: (Acc (Matrix BaseLine), Acc (Matrix BaseLine))
         kern = w_kernel_function l m w
     in kernel_oversample kern npixFF qpx npixKern
 
-kernel_coordinates :: Exp Int -> Exp F -> Kwargs -> Acc ((Matrix BaseLine), (Matrix BaseLine))
-kernel_coordinates n theta kwargs =
+kernel_coordinates :: Exp Int -> Exp F -> KernelOptions -> Acc ((Matrix BaseLine), (Matrix BaseLine))
+kernel_coordinates n theta kernops =
     let
-        dl = (constant . fromIntegral . fromMaybe 0 . patHorShift) kwargs
-        dm = (constant . fromIntegral . fromMaybe 0 . patVerShift) kwargs
+        dl = (constant . fromIntegral . fromMaybe 0 . patHorShift) kernops
+        dm = (constant . fromIntegral . fromMaybe 0 . patVerShift) kernops
         (l,m) = unlift $ coordinates2 n :: (Acc (Matrix BaseLine), Acc (Matrix BaseLine))
         lm1 = map (liftTupf (*theta) (*theta)) (zip l m)
-        lm2 = case patTransMat kwargs of
+        lm2 = case patTransMat kernops of
             Nothing -> lm1
             Just t  -> map (\pair -> let (x, y) = unlift pair in lift
                 ( (t ! index2 0 0) * x + (t ! index2 1 0) * y
@@ -541,11 +617,13 @@ extract_oversampled a qpx n =
         qpx2 = A.fromIntegral (qpx * qpx)
     in map (*qpx2) w_kern 
 
-aw_kernel_fn :: AKernelF 
+aw_kernel_fn :: Exp Int
+             -> Exp Int
+             -> AKernelF 
              -> Maybe WKernelF
              -> KernelF
-aw_kernel_fn a_kernel_fn w_kernel_fn' theta w a1' a2' t' f'
-    kwargs@Kwargs{qpx = qpx', npixKern = n'} =
+aw_kernel_fn yf xf a_kernel_fn w_kernel_fn' theta w a1' a2' t' f'
+    kernops@KernelOptions{qpx = qpx', npixKern = n'} =
     let 
         w_kernel_fn = fromMaybe w_kernel w_kernel_fn'
         qpx = fromJust qpx'
@@ -560,19 +638,31 @@ aw_kernel_fn a_kernel_fn w_kernel_fn' theta w a1' a2' t' f'
 
         akern = convolve2d a1kern a2kern
 
-        wkern = w_kernel_fn theta w kwargs
+        wkern = w_kernel_fn theta w kernops
 
         getkern :: Elt a => Exp Int -> Exp Int -> Acc (Array DIM4 a) -> Acc (Matrix a)
         getkern yf xf a = slice a (lift (Z :. yf :. xf :. All :. All))
 
-        newd = constant $ Z :. qpx :. qpx :. n :. n
+        newd = constant $ Z :. 1 :. 1 :. n :. n
 
-        awkernf yf xf =  reshape newd $ convolve2d akern (getkern (constant yf) (constant xf) wkern)
-        temp y = myfor (qpx - 1) (\x old -> concatOn _3 (awkernf y x) old) (awkernf y (qpx - 1))
+        awkernf =  reshape newd $ convolve2d akern (getkern yf xf wkern)
+    in awkernf
 
-        result = myfor (qpx - 1) (\y old -> concatOn _4 (temp y) old) (temp (qpx - 1))
+aw_kernel_fn2 :: Exp Int
+              -> Exp Int
+              -> Acc WKernel
+              -> Acc AKernel
+              -> Acc AKernel
+              -> Acc AWKernel
+aw_kernel_fn2 yf xf wkern a1kern a2kern =
+    let
+        akern = convolve2d a1kern a2kern
 
-    in result
+        getkern :: Elt a => Exp Int -> Exp Int -> Acc (Array DIM4 a) -> Acc (Matrix a)
+        getkern yf xf a = slice a (lift (Z :. yf :. xf :. All :. All))
+
+        awkern =  convolve2d akern (getkern yf xf wkern)
+    in awkern
 
 -- the kernels for Aw-gridding will normally be chosen to /not/ overflow the borders 
 -- Thus we chose the simpler method
