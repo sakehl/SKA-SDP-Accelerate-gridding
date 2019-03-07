@@ -34,11 +34,17 @@ foreign import ccall unsafe "getRankDataset"
 foreign import ccall unsafe "getDimsDataset"
     c_getDimsDataset :: CString -> CString -> CInt -> Ptr CInt -> IO ()
 
+foreign import ccall unsafe "readDatasetInt"
+    c_readDatasetInt :: CString -> CString -> Ptr CInt -> IO ()
+
 foreign import ccall unsafe "readDatasetDouble"
     c_readDatasetDouble :: CString -> CString -> Ptr CDouble -> IO ()
 
 foreign import ccall unsafe "readDatasetComplex"
     c_readDatasetComplex :: CString -> CString -> Ptr ComplexCDouble -> IO ()
+
+foreign import ccall unsafe "createDatasetInt"
+    c_createDatasetInt :: CString -> CString -> CInt -> Ptr CInt -> Ptr CInt -> IO ()
 
 foreign import ccall unsafe "createDatasetDouble"
     c_createDatasetDouble :: CString -> CString -> CInt -> Ptr CInt -> Ptr CDouble -> IO ()
@@ -46,7 +52,8 @@ foreign import ccall unsafe "createDatasetDouble"
 foreign import ccall unsafe "createDatasetComplex"
     c_createDatasetComplex :: CString -> CString -> CInt -> Ptr CInt -> Ptr ComplexCDouble -> IO ()
 
-
+foreign import ccall unsafe "listGroupMembers"
+    c_listGroupMembers :: CString -> CString -> IO (Ptr CString)
 
 createh5File :: String -> IO ()
 createh5File name' = do 
@@ -58,6 +65,8 @@ createDatasetDoubleV = createDatasetV c_createDatasetDouble
 createDatasetComplexV :: String -> String -> CInt -> SV.Vector CInt -> SV.Vector ComplexCDouble -> IO ()
 createDatasetComplexV = createDatasetV c_createDatasetComplex
 
+readDatasetIntV :: String -> String -> IO (SV.Vector CInt)
+readDatasetIntV = readDatasetV c_readDatasetInt
 readDatasetDoubleV :: String -> String -> IO (SV.Vector CDouble)
 readDatasetDoubleV = readDatasetV c_readDatasetDouble
 readDatasetComplexV :: String -> String -> IO (SV.Vector ComplexCDouble)
@@ -88,6 +97,14 @@ getRankDataset name' dataset' = do
     name <- newCString name'
     dataset <- newCString dataset'
     c_getRankDataset name dataset
+
+listGroupMembers :: String -> String -> IO [String]
+listGroupMembers name' group' = do
+    name <- newCString name'
+    group <- newCString group'
+    listp <- c_listGroupMembers name group
+    cstringp <- peekArray0 nullPtr listp
+    mapM peekCString cstringp
 
 readDatasetV :: Storable a => (CString -> CString -> Ptr a -> IO ()) 
             -> String -> String -> IO (SV.Vector a)
@@ -150,6 +167,16 @@ readDataset2 reader name' dataset' = do
     --return $ SV.unsafeFromForeignPtr0 foreign_dat (fromIntegral total)
     let shape = A.Z A.:.  (fromIntegral total)
     return $ A.fromForeignPtrs shape foreign_dat
+
+readDatasetInt ::  (A.Shape sh) => String -> String -> IO (A.Array sh Int)
+readDatasetInt name dataset = do
+    vector <- readDatasetIntV name dataset
+    let vectorD = SV.unsafeCast vector
+
+    rank <- getRankDataset name dataset
+    dims <- getDimsDataset name dataset rank
+    let shape = A.listToShape . SV.toList . SV.map fromIntegral $ dims
+    return $ A.fromVectors shape vectorD
 
 readDatasetDouble ::  (A.Shape sh) => String -> String -> IO (A.Array sh Double)
 readDatasetDouble name dataset = do

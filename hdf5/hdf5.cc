@@ -35,11 +35,20 @@ typedef enum {
     COMPLEXINT
 } TYPE;
 
+typedef struct
+{
+    char  **names; //Names to be stored
+    int   id;      //The id of where we are
+} iterate;
+
 int the_create(char *name);
 char* fix_ext (char *name);
 void readDataset(TYPE type, char *name, char* dataset, void* data);
 void createDataset(TYPE type, char *name, char* dataset, int rank, int* dims, void* data);
 hid_t complextype(TYPE type);
+// Operator function to be called by H5Literate.
+herr_t lister (hid_t loc_id, const char *name, const H5L_info_t *info, void *operator_data);
+herr_t counter (hid_t loc_id, const char *name, const H5L_info_t *info,void *count);  
 
 ///////////////////////////////////////////////////////////////
 //The external bindings
@@ -58,6 +67,11 @@ extern "C" void createh5File(char *name)
     status = H5Fclose(file_id); 
 }
 
+extern "C" void readDatasetInt( char *name, char* dataset, int* data)
+{
+    readDataset(INT, name, dataset, (void*)data);
+}
+
 extern "C" void readDatasetDouble( char *name, char* dataset, double* data)
 {
     readDataset(DOUBLE, name, dataset, (void*)data);
@@ -66,6 +80,11 @@ extern "C" void readDatasetDouble( char *name, char* dataset, double* data)
 extern "C" void readDatasetComplex( char *name, char* dataset, complexDouble* data)
 {
     readDataset(COMPLEXDOUBLE, name, dataset, (void*)data);
+}
+
+extern "C" void createDatasetInt( char *name, char* dataset, int rank, int* dims, int* data)
+{
+    createDataset(INT, name, dataset, rank, dims, (void*)data);
 }
 
 extern "C" void createDatasetDouble( char *name, char* dataset, int rank, int* dims, double* data)
@@ -78,9 +97,7 @@ extern "C" void createDatasetComplex(char *name, char* dataset, int rank, int* d
     createDataset(COMPLEXDOUBLE, name, dataset, rank, dims, data);
 }
 
-extern "C" int getRankDataset( char *name
-                  , char* dataset
-                  )
+extern "C" int getRankDataset( char *name, char* dataset)
 {
     hid_t      file_id;   /* file identifier */
     name = fix_ext(name);
@@ -95,11 +112,7 @@ extern "C" int getRankDataset( char *name
     return rank[0];
 }
 
-extern "C" void getDimsDataset( char *name
-                  , char* dataset
-                  , int rank
-                  , int* dims
-                  )
+extern "C" void getDimsDataset( char *name, char* dataset, int rank, int* dims)
 {
     hid_t      file_id;   /* file identifier */
     hsize_t    h_dims[rank];
@@ -114,6 +127,38 @@ extern "C" void getDimsDataset( char *name
         dims[i] = h_dims[i];
     /* close file */
     H5Fclose (file_id);
+}
+
+extern "C" char** listGroupMembers (char *name, char* groupname)
+{
+    hid_t           file, group;           /* Handle */
+    herr_t          status;
+    int count;
+    count = 0;
+    iterate dat;
+    name = fix_ext(name);
+    
+    // Open file.
+    file = H5Fopen (name, H5F_ACC_RDONLY, H5P_DEFAULT);
+    group = H5Gopen(file, groupname, H5P_DEFAULT);
+    
+    // Begin iteration.
+    status = H5Literate (group, H5_INDEX_NAME, H5_ITER_NATIVE, NULL, counter, (void *) &count);
+    
+    char** operator_data;
+    operator_data = (char **) malloc((count + 1) * sizeof(char *));
+    dat.id = 0;
+    dat.names = operator_data;
+    
+    status = H5Literate (group, H5_INDEX_NAME, H5_ITER_NATIVE, NULL, lister, (void *) &dat);
+    
+    operator_data[count] = NULL;
+    
+    //Close and release resources.
+    status = H5Gclose (group);
+    status = H5Fclose (file);
+    
+    return operator_data;
 }
 
 //Helpers 
@@ -140,13 +185,7 @@ hid_t complextype(TYPE type){
     return memtype;
 }
 
-void createDataset( TYPE type
-                  , char *name
-                  , char* dataset
-                  , int rank
-                  , int* dims
-                  , void* data
-                  )
+void createDataset( TYPE type, char *name, char* dataset, int rank, int* dims, void* data)
 {
     hid_t       file_id, memtype;   /* file identifier */
     hsize_t    thedims[rank];
@@ -176,11 +215,7 @@ void createDataset( TYPE type
     H5Fclose (file_id);
 }
 
-void readDataset( TYPE type
-                , char *name
-                , char* dataset
-                , void* data
-                )
+void readDataset( TYPE type, char *name, char* dataset, void* data)
 {
     hid_t      file_id, memtype;   /* file identifier */
     name = fix_ext(name);
@@ -208,8 +243,24 @@ void readDataset( TYPE type
     
 }
 
+// Operator function for iterator
+herr_t lister (hid_t loc_id, const char *name, const H5L_info_t *info,void *operator_data)
+{
+    iterate *dat = (iterate *) operator_data;
+    char ** strlist = dat->names;
+    
+    strlist[dat->id] = (char *) malloc(strlen(name) + 1);
+    strcpy(strlist[dat->id], name);
+    dat->id++;
+    return 0;
+}
 
-// Helpers
+herr_t counter (hid_t loc_id, const char *name, const H5L_info_t *info,void *count)
+{
+    ((int *) count)[0]++;
+    return 0;
+}
+
 char* fix_ext(char* name)
 {
     char *dot = strrchr(name, '.');
@@ -217,3 +268,27 @@ char* fix_ext(char* name)
         name = strcat(name, ".h5");
     return name;
 }
+
+
+/*
+int main()
+{
+    char* in = (char*) malloc(strlen("test")+1); // +1 for the terminator
+    strcpy(in,"test");
+    char* group = (char*) malloc(strlen("/")+1); // +1 for the terminator
+    strcpy(group,"/");
+    
+    char** data; // data[20];
+    
+    data = listGroupMembers(in, group);
+    
+    //printf("%s" , data[0]);
+    while(*data != NULL)
+    {
+        printf("%s\n", *data);
+        data += 1;
+    }
+    
+    return 0;
+}
+*/

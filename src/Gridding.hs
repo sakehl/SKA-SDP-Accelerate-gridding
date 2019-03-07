@@ -397,20 +397,27 @@ aw_imaging kernops@KernelOptions{wstep = wstep', qpx = qpx'}
     
 ----------------------------------
 -- Processing the imaging functions
-do_imaging :: F                                 -- Field of view size
-           -> Int                                    -- Grid size
-           -> Vector BaseLines        -- all the uvw baselines (coordinates) (lenght : n * (n-1))
-           -> Vector (Antenna, Antenna, Time, Frequency)      -- (Antenna 1, Antenna 2, The time (in MJD UTC), Frequency (Hz)) (lenght : n * (n-1))
+do_imaging :: F                                -- Field of view size
+           -> Int                              -- Grid size
+           -> Matrix BaseLine                  -- all the uvw baselines (coordinates) (dims : (n * (n-1), 3))
+           -> Vector Antenna                   -- Antenna 1 (lenght : n * (n-1))
+           -> Vector Antenna                   -- Antenna 2
+           -> Vector Time                      -- The time (in MJD UTC)
+           -> Frequency                        -- Frequency (Hz)
            -> Vector Visibility                -- visibility  (length n * (n-1))
            -> ImagingFunction
            -> Acc (Image,Image, Scalar F)
-do_imaging theta lam uvw src vis imgfn =
+do_imaging theta lam uvw a1 a2 t f vis imgfn =
     let
         -- TODO: if src == None: src = numpy.ndarray((len(vis), 0))
         len = arrayShape vis
-        uvw0 = use uvw
+        uvwmat = use uvw
+        u = slice uvwmat (constant (Z :. All :. (0 :: Int)))
+        v = slice uvwmat (constant (Z :. All :. (1 :: Int)))
+        w = slice uvwmat (constant (Z :. All :. (2 :: Int)))
+        uvw0 = zip3 u v w
         vis0 = use vis
-        src0 = use src
+        src0 = zip4 (use a1) (use a2) (use t) (fill (lift len) (constant f))
         -- Mirror baselines such that v>0
         (uvw1,vis1) = unzip $ mirror_uvw uvw0 vis0
 
