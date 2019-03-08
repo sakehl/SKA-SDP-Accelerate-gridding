@@ -15,6 +15,7 @@ type Visibility = Complex F
 type Time = F
 type Frequency = F
 type Image = Matrix F
+type FourierSpace = Matrix Visibility
 
 type Kernel = Array DIM4 Visibility
 

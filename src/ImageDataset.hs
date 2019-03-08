@@ -17,30 +17,45 @@ import Data.Array.Accelerate.Interpreter                  as I
 
 import qualified Prelude as P
 import Prelude as P (fromIntegral, fromInteger, fromRational, String, return, (>>=), (>>), IO, Maybe(..), maybe)
-import qualified Data.List as L (sort,(!!) )
+import qualified Data.List as L (sort,(!!),sortBy)
 
-aw_gridding :: String -> String -> String -> IO Image
+aw_gridding :: String -> String -> String -> IO FourierSpace
 aw_gridding wfile afile datfile = do
     let theta    = 0.08
-        lam      = 180
+        lam      = 18
     vis <- readVis datfile 
     uvw <- readBaselines datfile
     (a1,a2,ts,f) <- readSource datfile
     let t = linearIndexArray ts 0
     akerns <- getAKernels afile theta t f
-    wkerns <- getWKernels wfile
+    wkerns <- getWKernels wfile theta
     let oargs = noOtherArgs{akernels = Just akerns, wkernels = Just wkerns}
         args = noArgs
-        (res, _, _) =CPU.run $ do_imaging theta lam uvw a1 a2 ts f vis (aw_imaging args oargs)
-        --testing = CPU.run $ aw_imaging args oargs theta lam (use uvw) (use src) (use vis)
-    return res 
+        --(res, _, _) =CPU.run $ do_imaging theta lam uvw a1 a2 ts f vis (aw_imaging args oargs)
+        len = arrayShape vis
+        src0 = zip4 (use a1) (use a2) (use ts) (fill (lift len) (constant f))
+        uvwmat = use uvw
+        u = slice uvwmat (constant (Z :. All :. (0 :: Int)))
+        v = slice uvwmat (constant (Z :. All :. (1 :: Int)))
+        w = slice uvwmat (constant (Z :. All :. (2 :: Int)))
+        uvw0 = zip3 u v w
+        testing = CPU.run $ aw_imaging args oargs theta lam (take 1 $ uvw0) (take 1 $ src0) (take 1 $ use vis)
+    P.putStrLn "Start imaging"
+    P.putStrLn $ printf "theta %f, lam %i, vis count %s" theta lam (P.show . arraySize  $ vis)
+    return testing 
 
     where
         readVis :: String -> IO (Vector Visibility)
-        readVis file = readDatasetComplex file "vis/vis"
+        readVis file = do
+            v <- readDatasetComplex file "/vis/vis" :: IO (Array DIM3 Visibility)
+            let size = arraySize v
+                newv = arrayReshape (Z :. size :: DIM1) v
+            return newv
 
         readBaselines :: String -> IO (Matrix BaseLine)
-        readBaselines file = readDatasetDouble file "/vis/uvw"
+        readBaselines file = do
+            r <- readDatasetDouble file "/vis/uvw"
+            return r
 
         readSource :: String -> IO (Vector Antenna, Vector Antenna, Vector Time, Frequency)
         readSource file = do
@@ -50,48 +65,55 @@ aw_gridding wfile afile datfile = do
             f  <- readDatasetDouble file "/vis/frequency" :: IO (Vector Frequency)
             let f0 = linearIndexArray f 0
             return (a1, a2, t, f0)
-
-        getAKernels :: String -> F -> Time -> Frequency -> IO (Array DIM3 Visibility)
-        getAKernels file theta t f = do 
-            ants <- listGroupMembers file (printf "/akern/%f" theta)
-            
-            
-            
-            return (fromList (Z :. 3 :. 4 :. 4) [ sin (5 * x + 1) :+ cos x| x <- [0..] ])
-
-        getWKernels :: String -> IO (Array DIM5 Visibility, Vector BaseLine)
-        getWKernels _ = return (fromList (Z :. 2 :. 2 :. 2 :. 4 :. 4) [ sin (5 * x + 1) :+ cos x| x <- [0..] ], fromList (Z :. 2) [0..])
         
 getAKernels :: String -> F -> Time -> Frequency -> IO (Array DIM3 Visibility)
 getAKernels file theta t f = do
     P.putStrLn "Loading A kernels"
     --Get all the antennas
     ants <- listGroupMembers file (printf "/akern/%f" theta)
-    let ants0 = L.sort . P.map P.read $ ants :: [Int]
-        a0 = P.head ants0
+    let antsSorted = convertAndSort ants :: [(Int, String)]
+        a0 = P.snd . P.head $ antsSorted
     --Get all the times
-    ts <- listGroupMembers file (printf "/akern/%f/%i" theta a0)
-    let ts0 = L.sort . P.map P.read $ ts :: [Time]
-        closestt = findClosestL ts0 t
-    P.putStrLn $ printf "Closest time found in a-kernels is %f (input time: %f)" closestt t
+    ts <- listGroupMembers file (printf "/akern/%f/%s" theta a0)
+    let tsSorted = convertAndSort ts :: [(Time, String)]
+        ts0      = P.map P.fst tsSorted
+        idt      = P.snd $ findClosestList ts0 t
+        closestt =  P.snd $ tsSorted L.!! idt
+    P.putStrLn $ printf "Closest time found in a-kernels is %s (input time: %f)" closestt t
     --Get all the frequencies
-    fs <- listGroupMembers file (printf "/akern/%f/%i/%.1f" theta a0 closestt)
-    let fs0 = L.sort . P.map P.read $ fs :: [Frequency]
-        closestf = findClosestL fs0 f
-    P.putStrLn $ printf "Closest frequency found in a-kernels is %f (input frequency: %f)" closestf f
+    fs <- listGroupMembers file (printf "/akern/%f/%s/%s" theta a0 closestt)
+    let fsSorted = convertAndSort fs :: [(Frequency, String)]
+        fs0      = P.map P.fst tsSorted
+        idf      = P.snd $ findClosestList fs0 f
+        closestf =  P.snd $ fsSorted L.!! idf
+    P.putStrLn $ printf "Closest frequency found in a-kernels is %s (input frequency: %f)" closestf f
+    -- Get all the kernels from the antenna's
+    let alldatasets = P.map  (\a -> printf "/akern/%f/%s/%s/%s/kern" theta (P.snd a) closestt closestf) antsSorted
+    akerns <- readDatasetsComplex file alldatasets :: IO (Array DIM3 Visibility)
+    P.putStrLn "A kernels loaded"
+    return akerns
+
     
-    -- For now only get the first one
-    akern0 <- readDatasetComplex file (printf "/akern/%f/%i/%.1f/%.0f/kern" theta a0 closestt closestf) :: IO (Matrix Visibility)
-    allkerns <- P.mapM (\a -> readDatasetComplex file (printf "/akern/%f/%i/%.1f/%.0f/kern" theta a closestt closestf)) ants0 :: IO [Matrix Visibility]
-    let Z :. y :. x = arrayShape akern0 :: DIM2
-        newsh = Z :. 1 :. y :. x :: DIM3
-        akern0' = arrayReshape newsh akern0
-    return akern0'
+getWKernels :: String -> F -> IO (Array DIM5 Visibility, Vector BaseLine)
+getWKernels file theta = do
+    P.putStrLn "Loading W kernels"
+    --Get all the wbins
+    wbins <- listGroupMembers file (printf "/wkern/%f" theta)
+    let wbinsSorted = convertAndSort wbins :: [(BaseLine, String)]
+        alldatasets = P.map  (\w -> printf "/wkern/%f/%s/kern" theta (P.snd w)) wbinsSorted
+        --The wbins as vector
+        wbinsv = fromList (Z :. P.length wbinsSorted :: DIM1) (P.map (P.fst) wbinsSorted)
+    -- Get all the kernels from the wbins
+    wkerns <- readDatasetsComplex file alldatasets :: IO (Array DIM5 Visibility)
+    P.putStrLn "W kernels loaded"
+    return (wkerns, wbinsv)
 
-test = getAKernels "SKA1_Low_akern.h5" 0.08 0 0
 
-findClosestL :: (P.Num a, P.Ord a) => [a] -> a -> a
-findClosestL ws w =
+
+
+-- Some helpers
+findClosestList :: (P.Num a, P.Ord a) => [a] -> a -> (a, Int)
+findClosestList ws w =
     let ifte g i e | g = i
                    | P.otherwise = e
         cmp (min, max) = (max P.- min) `P.div` 2 P.>= 1
@@ -107,11 +129,14 @@ findClosestL ws w =
         v1 = ws L.!! r1
         v2 = ws L.!! r2
 
-    in ifte (P.abs (w P.- v1) P.< abs (w P.- v2)) v1 v2
+    in ifte (P.abs (w P.- v1) P.< abs (w P.- v2)) (v1, r1) (v2, r2)
 
 mywhile :: (a -> Bool) -> (a -> a) -> a -> a
 mywhile cmp f init | P.not (cmp init) = init
-                 | P.otherwise = mywhile cmp f (f P.$! init)
+                   | P.otherwise = mywhile cmp f (f P.$! init)
 
-concatMatrices :: Elt a => [Matrix a] -> Array DIM3 a
-concatMatrices ms = undefined
+convertAndSort :: (P.Read a, P.Ord a) => [String] -> [(a, String)]
+convertAndSort xs = let
+    converted = P.map (\x -> (P.read x, x) ) xs
+    sorter (a,_) (b,_) = P.compare a b
+    in L.sortBy sorter converted

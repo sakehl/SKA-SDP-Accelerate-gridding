@@ -44,6 +44,7 @@ typedef struct
 int the_create(char *name);
 char* fix_ext (char *name);
 void readDataset(TYPE type, char *name, char* dataset, void* data);
+void readDatasets(TYPE type, char *name, char** dataset, void* data);
 void createDataset(TYPE type, char *name, char* dataset, int rank, int* dims, void* data);
 hid_t complextype(TYPE type);
 // Operator function to be called by H5Literate.
@@ -82,6 +83,17 @@ extern "C" void readDatasetComplex( char *name, char* dataset, complexDouble* da
     readDataset(COMPLEXDOUBLE, name, dataset, (void*)data);
 }
 
+extern "C" void readDatasetsDouble( char *name, char** datasets, double* data)
+{
+    readDatasets(DOUBLE, name, datasets, (void*)data);
+}
+
+extern "C" void readDatasetsComplex( char *name, char** datasets, complexDouble* data)
+{
+    readDatasets(COMPLEXDOUBLE, name, datasets, (void*)data);
+}
+
+
 extern "C" void createDatasetInt( char *name, char* dataset, int rank, int* dims, int* data)
 {
     createDataset(INT, name, dataset, rank, dims, (void*)data);
@@ -101,15 +113,15 @@ extern "C" int getRankDataset( char *name, char* dataset)
 {
     hid_t      file_id;   /* file identifier */
     name = fix_ext(name);
-    int rank[1];
+    int rank;
     
      /* open file */
     file_id = H5Fopen (name, H5F_ACC_RDONLY, H5P_DEFAULT);
     /* get the dimensions of the dataset */
-    H5LTget_dataset_ndims(file_id,dataset,rank);
+    H5LTget_dataset_ndims(file_id,dataset,&rank);
     /* close file */
     H5Fclose (file_id);
-    return rank[0];
+    return rank;
 }
 
 extern "C" void getDimsDataset( char *name, char* dataset, int rank, int* dims)
@@ -240,7 +252,58 @@ void readDataset( TYPE type, char *name, char* dataset, void* data)
         case COMPLEXINT: H5Tclose(memtype); break;
     }
     H5Fclose (file_id);
+}
+
+void readDatasets( TYPE type, char *name, char** datasets, void* data)
+{
+    hid_t      file_id, memtype;   /* file identifier */
+    name = fix_ext(name);
+    int rank;
+    int datasize;
+
+    switch(type){
+        case CHAR: memtype = H5T_NATIVE_CHAR;
+                   datasize = sizeof(char); break;
+        case INT: memtype = H5T_NATIVE_INT;
+                  datasize = sizeof(int); break;
+        case FLOAT: memtype = H5T_NATIVE_FLOAT ;
+                    datasize = sizeof(float); break;
+        case DOUBLE: memtype = H5T_NATIVE_DOUBLE ;
+                     datasize = sizeof(double); break;
+        case COMPLEXDOUBLE: memtype = complextype(type) ;
+                            datasize = 2*sizeof(double); break;
+        case COMPLEXFLOAT: memtype = complextype(type) ;
+                           datasize = 2*sizeof(float); break;
+        case COMPLEXINT: memtype = complextype(type) ;
+                         datasize = 2*sizeof(int); break;
+    }
     
+     /* open file */
+    file_id = H5Fopen (name, H5F_ACC_RDONLY, H5P_DEFAULT);
+    /* get information about ranks and dims of the first dataset*/
+    char* dataset0 = datasets[0];
+    H5LTget_dataset_ndims(file_id,dataset0,&rank);
+    hsize_t dims[rank];
+    H5LTget_dataset_info(file_id,dataset0,dims,NULL,NULL);
+    int sizedataset = 1;
+    for (int i = 0; i < rank; i++)
+        sizedataset *= (int) dims[i];
+    //We cannot do pointer arithemtics on void, so cast it to char, which is always 1 byte big
+    char *currentdata = (char *) data;
+    int i = 0;
+    /* read all the datasets */
+    while(datasets[i] != NULL)
+    {
+        H5LTread_dataset(file_id,datasets[i++],memtype, (void *)currentdata);
+        currentdata += datasize * sizedataset;
+    }
+    /* close file and memory type */
+    switch(type){
+        case COMPLEXDOUBLE: 
+        case COMPLEXFLOAT:
+        case COMPLEXINT: H5Tclose(memtype); break;
+    }
+    H5Fclose (file_id);
 }
 
 // Operator function for iterator
@@ -271,6 +334,7 @@ char* fix_ext(char* name)
 
 
 /*
+// For testing purposes
 int main()
 {
     char* in = (char*) malloc(strlen("test")+1); // +1 for the terminator
@@ -281,14 +345,24 @@ int main()
     char** data; // data[20];
     
     data = listGroupMembers(in, group);
+
+    int rank = getRankDataset(in, *data);
+    int dims[rank];
+    getDimsDataset(in, *data, rank, dims);
+    int sizedataset = 1;
+    for (int i = 0; i < rank; i++)
+        sizedataset *= (int) dims[i];
+    double alldata[sizedataset * 2];
+    readDatasets(DOUBLE, in, data, alldata);
     
-    //printf("%s" , data[0]);
     while(*data != NULL)
     {
         printf("%s\n", *data);
         data += 1;
     }
-    
+    for(int i =0; i < sizedataset * 2; i++)
+    {
+        printf("%f\n", alldata[i]);
+    }
     return 0;
-}
-*/
+}*/
