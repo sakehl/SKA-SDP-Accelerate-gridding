@@ -13,8 +13,6 @@ high performance computing embedded in [Haskell].
 * When building and executing on ubuntu, I ran into the following linking [bug] for libffi. To fix it, I created the symbolic link libffi.so.7 pointing to libffi.so.6 in the systems lib directory
 * The general accelerate instalation is used, with the CPU backend. The backend is build with LLVM 7.0, so install that one aswell. See [Accelerate] for more details.
 
-# HDF
-
 [bug]: https://github.com/commercialhaskell/stack/issues/4150
 [SKA-SDP]:    https://github.com/SKA-ScienceDataProcessor
 [Accelerate]: https://www.acceleratehs.org
