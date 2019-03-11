@@ -28,6 +28,7 @@ typedef struct {
 typedef enum {
     CHAR,
     INT,
+    LLONG,
     FLOAT,
     DOUBLE,
     COMPLEXDOUBLE,
@@ -68,6 +69,11 @@ extern "C" void createh5File(char *name)
     status = H5Fclose(file_id); 
 }
 
+extern "C" void readDatasetLLong( char *name, char* dataset, long long* data)
+{
+    readDataset(LLONG, name, dataset, (void*)data);
+}
+
 extern "C" void readDatasetInt( char *name, char* dataset, int* data)
 {
     readDataset(INT, name, dataset, (void*)data);
@@ -97,6 +103,11 @@ extern "C" void readDatasetsComplex( char *name, char** datasets, complexDouble*
 extern "C" void createDatasetInt( char *name, char* dataset, int rank, int* dims, int* data)
 {
     createDataset(INT, name, dataset, rank, dims, (void*)data);
+}
+
+extern "C" void createDatasetLLong( char *name, char* dataset, int rank, int* dims, long long* data)
+{
+    createDataset(LLONG, name, dataset, rank, dims, (void*)data);
 }
 
 extern "C" void createDatasetDouble( char *name, char* dataset, int rank, int* dims, double* data)
@@ -204,6 +215,7 @@ void createDataset( TYPE type, char *name, char* dataset, int rank, int* dims, v
     switch(type){
         case CHAR: memtype = H5T_NATIVE_CHAR; break;
         case INT: memtype = H5T_NATIVE_INT ; break;
+        case LLONG : memtype = H5T_NATIVE_LLONG; break;
         case FLOAT: memtype = H5T_NATIVE_FLOAT ; break;
         case DOUBLE: memtype = H5T_NATIVE_DOUBLE ; break;
         case COMPLEXDOUBLE: 
@@ -234,6 +246,7 @@ void readDataset( TYPE type, char *name, char* dataset, void* data)
     switch(type){
         case CHAR: memtype = H5T_NATIVE_CHAR; break;
         case INT: memtype = H5T_NATIVE_INT ; break;
+        case LLONG : memtype = H5T_NATIVE_LLONG; break;
         case FLOAT: memtype = H5T_NATIVE_FLOAT ; break;
         case DOUBLE: memtype = H5T_NATIVE_DOUBLE ; break;
         case COMPLEXDOUBLE: 

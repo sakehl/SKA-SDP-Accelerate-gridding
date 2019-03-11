@@ -391,7 +391,7 @@ aw_imaging kernops@KernelOptions{wstep = wstep', qpx = qpx'}
         (_,_,w) = unzip3 uvw
         closestw = map (findClosest (use wbins)) w
         (a1, a2, _, _) = unzip4 src
-        index = zip3 closestw a1 a2
+        index = zipWith3 (\x y z -> lift (x, A.fromIntegral y, A.fromIntegral z)) closestw a1 a2
         --Normally we conjugate the kernel here, but we do it later on in the convgrid3 (or processOne) function somewhere
     in convgrid3 (use wkernels) (use akernels) guv p index vis
     

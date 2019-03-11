@@ -10,7 +10,7 @@ type I = Int
 
 type BaseLine = F
 type BaseLines = (F,F,F)
-type Antenna = Int
+type Antenna = Int64
 type Visibility = Complex F
 type Time = F
 type Frequency = F

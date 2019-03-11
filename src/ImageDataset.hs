@@ -14,15 +14,18 @@ import Data.Array.Accelerate.Math.FFT                     as A
 
 import Data.Array.Accelerate.LLVM.Native                  as CPU
 import Data.Array.Accelerate.Interpreter                  as I
+import Data.Array.Accelerate.Debug                        as A
 
 import qualified Prelude as P
 import Prelude as P (fromIntegral, fromInteger, fromRational, String, return, (>>=), (>>), IO, Maybe(..), maybe)
 import qualified Data.List as L (sort,(!!),sortBy)
 
+--aw_gridding :: String -> String -> String -> IO Image
 aw_gridding :: String -> String -> String -> IO FourierSpace
 aw_gridding wfile afile datfile = do
+    setFlag dump_phases
     let theta    = 0.08
-        lam      = 18
+        lam      = 180
     vis <- readVis datfile 
     uvw <- readBaselines datfile
     (a1,a2,ts,f) <- readSource datfile
@@ -31,7 +34,7 @@ aw_gridding wfile afile datfile = do
     wkerns <- getWKernels wfile theta
     let oargs = noOtherArgs{akernels = Just akerns, wkernels = Just wkerns}
         args = noArgs
-        --(res, _, _) =CPU.run $ do_imaging theta lam uvw a1 a2 ts f vis (aw_imaging args oargs)
+        (res, _, _) =CPU.run $ do_imaging theta lam uvw a1 a2 ts f vis (aw_imaging args oargs)
         len = arrayShape vis
         src0 = zip4 (use a1) (use a2) (use ts) (fill (lift len) (constant f))
         uvwmat = use uvw
@@ -39,9 +42,12 @@ aw_gridding wfile afile datfile = do
         v = slice uvwmat (constant (Z :. All :. (1 :: Int)))
         w = slice uvwmat (constant (Z :. All :. (2 :: Int)))
         uvw0 = zip3 u v w
-        testing = CPU.run $ aw_imaging args oargs theta lam (take 1 $ uvw0) (take 1 $ src0) (take 1 $ use vis)
+        m = 4
+        myuvw = (take m $ uvw0)
+        mysrc = (take m $ src0)
+        myvis = (take m $ use vis)
+        testing = CPU.run $ aw_imaging args oargs theta lam myuvw mysrc myvis
     P.putStrLn "Start imaging"
-    P.putStrLn $ printf "theta %f, lam %i, vis count %s" theta lam (P.show . arraySize  $ vis)
     return testing 
 
     where
@@ -59,8 +65,8 @@ aw_gridding wfile afile datfile = do
 
         readSource :: String -> IO (Vector Antenna, Vector Antenna, Vector Time, Frequency)
         readSource file = do
-            a1 <- readDatasetInt file "/vis/antenna1" :: IO (Vector Antenna)
-            a2 <- readDatasetInt file "/vis/antenna2" :: IO (Vector Antenna)
+            a1 <- readDatasetInt64 file "/vis/antenna1" :: IO (Vector Antenna)
+            a2 <- readDatasetInt64 file "/vis/antenna2" :: IO (Vector Antenna)
             t  <- readDatasetDouble file "/vis/time" :: IO (Vector Time)
             f  <- readDatasetDouble file "/vis/frequency" :: IO (Vector Frequency)
             let f0 = linearIndexArray f 0

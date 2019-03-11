@@ -24,21 +24,29 @@ dependencies:
   - accelerate
   - accelerate-llvm-native
   - accelerate-fft
+  - accelerate-io
   - lens
+  - vector
+  - directory
 
 library:
   source-dirs: src
+  c-sources: hdf5/hdf5.cc
+  extra-libraries: hdf5, hdf5_hl
+  extra-lib-dirs: /usr/lib/x86_64-linux-gnu/hdf5/serial
+  include-dirs: /usr/include/hdf5/serial
+  cc-options: -fPIC
 
-# executables:
-#   ska-sdp-accelerate-exe:
-#     main:                Main.hs
-#     source-dirs:         app
-#     ghc-options:
-#       - -threaded
-#       - -rtsopts
-#       - -with-rtsopts=-N
-#     dependencies:
-#       - ska-sdp-accelerate
+executables:
+  ska-sdp-accelerate-exe:
+    main:                Main.hs
+    source-dirs:         app
+    ghc-options:
+      - -threaded
+      - -rtsopts
+      - -with-rtsopts=-N
+    dependencies:
+      - ska-sdp-accelerate
 
 # tests:
 #   ska-sdp-accelerate-test:
