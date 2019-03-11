@@ -76,18 +76,6 @@ createDatasetDoubleV = createDatasetV c_createDatasetDouble
 createDatasetComplexV :: String -> String -> CInt -> SV.Vector CInt -> SV.Vector ComplexCDouble -> IO ()
 createDatasetComplexV = createDatasetV c_createDatasetComplex
 
-readDatasetInt64V :: String -> String -> IO (SV.Vector CLong)
-readDatasetInt64V = readDatasetV c_readDatasetInt64
-readDatasetDoubleV :: String -> String -> IO (SV.Vector CDouble)
-readDatasetDoubleV = readDatasetV c_readDatasetDouble
-readDatasetComplexV :: String -> String -> IO (SV.Vector ComplexCDouble)
-readDatasetComplexV = readDatasetV c_readDatasetComplex
-
-readDatasetsDoubleV :: String -> [String] -> IO (SV.Vector CDouble)
-readDatasetsDoubleV = readDatasetsV c_readDatasetsDouble
-readDatasetsComplexV :: String -> [String] -> IO (SV.Vector ComplexCDouble)
-readDatasetsComplexV = readDatasetsV c_readDatasetsComplex
-
 createDatasetV :: Storable a => (CString -> CString -> CInt -> Ptr CInt -> Ptr a -> IO ()) -> 
     String -> String -> CInt -> SV.Vector CInt -> SV.Vector a -> IO ()
 createDatasetV c_createDataset name' dataset' rank dims dat = do
@@ -122,46 +110,6 @@ listGroupMembers name' group' = do
     cstringp <- peekArray0 nullPtr listp
     mapM peekCString cstringp
 
-readDatasetV :: Storable a => (CString -> CString -> Ptr a -> IO ()) 
-            -> String -> String -> IO (SV.Vector a)
-readDatasetV reader name' dataset' = do
-    name <- newCString name'
-    dataset <- newCString dataset'
-    --Get the rank and dimensions, and calculate how many elements the dataset has
-    rank <- getRankDataset name' dataset'
-    dims <- getDimsDataset name' dataset' rank
-    let total = SV.product dims
-    -- Allocate enough memory for the array
-    dat <- mallocArray (fromIntegral total)
-    -- Get the data via the FFI binding
-    reader name dataset dat
-    -- Make it to a foreign pointer, this will make sure it gets freed eventually and we can get a Vector out of it
-    foreign_dat <- newForeignPtr finalizerFree dat
-    -- Give us back a vector :)
-    return $ SV.unsafeFromForeignPtr0 foreign_dat (fromIntegral total)
-
--- We will assume for efficient code, that each dataset has exactly the same type and dimenions.
-readDatasetsV :: Storable a => (CString -> Ptr CString -> Ptr a -> IO ()) 
-            -> String -> [String] -> IO (SV.Vector a)
-readDatasetsV reader name' datasets' = do
-    datasets <- mapM newCString datasets'
-    datasetsPtr <- newArray0 nullPtr datasets
-    name <- newCString name'
-    --dataset <- newCString dataset'
-    --Get the rank and dimensions, and calculate how many elements the dataset has
-    rank <- getRankDataset name' (head datasets')
-    dims <- getDimsDataset name' (head datasets') rank
-    let total = length datasets' * fromIntegral (SV.product dims)
-    -- Allocate enough memory for the array
-    dat <- mallocArray total
-    -- Get the data via the FFI binding
-    reader name datasetsPtr dat
-    -- Make it to a foreign pointer, this will make sure it gets freed eventually and we can get a Vector out of it
-    foreign_dat <- newForeignPtr finalizerFree dat
-    -- Give us back a vector :)
-    return $ SV.unsafeFromForeignPtr0 foreign_dat (fromIntegral total)
-
-
 readDataset :: forall e a b sh.(Storable b, A.EltRepr b ~ e, A.Elt b, A.ForeignPtrs e ~ ForeignPtr a, A.Shape sh) =>
              (CString -> CString -> Ptr b -> IO ())
             -> String -> String -> IO (A.Array sh b)
@@ -185,7 +133,7 @@ readDataset reader name' dataset' = do
     dims <- getDimsDataset name' dataset' rank
     let askedRank = A.arrayRank (undefined :: A.Array sh b)
         shape = assert (if (askedRank == fromIntegral rank) then True else error (printf "Assertion failed for dataset %s in file %s. Expected rank: %i, actual rank: %i" dataset' name' askedRank (fromIntegral rank :: Int)))
-                . A.listToShape . SV.toList . SV.map fromIntegral $ dims
+                . A.listToShape . reverse . SV.toList . SV.map fromIntegral $ dims
     return $ A.fromForeignPtrs shape foreign_dat
 
 readDatasets :: forall e a b sh.(Storable b, A.EltRepr b ~ e, A.Elt b, A.ForeignPtrs e ~ ForeignPtr a, A.Shape sh) =>
@@ -203,7 +151,7 @@ readDatasets reader name' datasets' = do
     let askedRank = A.arrayRank (undefined :: A.Array sh b)
         n = length datasets'
         total = assert (askedRank == 1 + fromIntegral rank) $ n * fromIntegral (SV.product dims)
-        newdims = (++[n]) . SV.toList . SV.map fromIntegral $ dims
+        newdims = reverse . (n:) . SV.toList . SV.map fromIntegral $ dims
         shape = A.listToShape newdims
     -- Allocate enough memory for the array
     dat <- mallocArray (fromIntegral total) :: IO (Ptr b)
@@ -233,7 +181,6 @@ readDatasetComplex n1 n2 = do
     m <- readDataset c_readDatasetComplex n1 n2
     return $ unsafeCastDataSet m
 
-
 readDatasetsDouble :: (A.Shape sh) => String -> [String] -> IO (A.Array sh Double)
 readDatasetsDouble n ds = do
     m <- readDatasets c_readDatasetsDouble n ds
@@ -244,40 +191,16 @@ readDatasetsComplex n ds = do
     m <- readDatasets c_readDatasetsComplex n ds
     return $ unsafeCastDataSet m
 
-readDatasetsDouble2 ::  (A.Shape sh) => String -> [String] -> IO (A.Array sh Double)
-readDatasetsDouble2 name datasets = do
-    vector <- readDatasetsDoubleV name datasets
-    let vectorD = SV.unsafeCast vector
-        n = length datasets
-
-    rank <- getRankDataset name (head datasets)
-    dims <- getDimsDataset name (head datasets) rank
-    let newdims = reverse . (n:) . SV.toList . SV.map fromIntegral $ dims
-        shape = A.listToShape newdims
-    return $ A.fromVectors shape vectorD
-
-readDatasetsComplex2 ::  (A.Shape sh) => String -> [String] -> IO (A.Array sh ComplexDouble)
-readDatasetsComplex2 name datasets = do
-    vector <- readDatasetsComplexV name datasets
-    let vectorD = SV.unsafeCast vector
-        n = length datasets
-
-    rank <- getRankDataset name (head datasets)
-    dims <- getDimsDataset name (head datasets) rank
-    let newdims = reverse . (n:) . SV.toList . SV.map fromIntegral $ dims
-        shape = A.listToShape newdims
-    return $ A.fromVectors shape vectorD
-
 createDatasetDouble :: (A.Shape sh) => String -> String -> A.Array sh Double -> IO ()
 createDatasetDouble name dataset dat= do
-    let dims = SV.map fromIntegral . SV.fromList . A.shapeToList . A.arrayShape $ dat
+    let dims = SV.map fromIntegral . SV.fromList . reverse . A.shapeToList . A.arrayShape $ dat
     let rank = fromIntegral . SV.length $ dims
     let vec = SV.unsafeCast . A.toVectors $ dat
     createDatasetDoubleV name dataset rank dims vec
 
 createDatasetComplex :: (A.Shape sh) => String -> String -> A.Array sh ComplexDouble -> IO ()
 createDatasetComplex name dataset dat = do
-    let dims = SV.map fromIntegral . SV.fromList . A.shapeToList . A.arrayShape $ dat :: SV.Vector CInt
+    let dims = SV.map fromIntegral . SV.fromList . reverse . A.shapeToList . A.arrayShape $ dat :: SV.Vector CInt
     let rank = fromIntegral . SV.length $ dims
     let vec = SV.unsafeCast . A.toVectors $ dat
     createDatasetComplexV name dataset rank dims vec

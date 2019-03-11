@@ -56,12 +56,3 @@ testIO = do
         where
             comparer :: (A.Elt e, A.Shape sh, A.Eq e) => A.Array sh e -> A.Array sh e -> A.Scalar Bool
             comparer = CPU.runN (\xs ys -> A.foldAll (A.&&) (A.lift True) $ A.zipWith (A.==) xs ys)
-
-
-testing :: IO (SV.Vector CDouble)
-testing = readDatasetsV (c_readDatasetsDouble) "hdf5/test" ["/dataset","/dset"]
-
-testing2 :: IO (A.Array A.DIM3 Double)
-testing2 = do arrs <- readDatasetsDouble "hdf5/test" ["/last_one","/dataset","/dset", "/last_one", "/last_one"]
-              putStrLn . show $ A.arrayShape arrs
-              return arrs

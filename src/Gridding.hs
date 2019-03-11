@@ -23,6 +23,8 @@ import Prelude as P (fromIntegral, fromInteger, fromRational, String, return, (>
 import Control.Lens as L (_1, _2, _3, _4, _5)
 import Data.Maybe (fromJust, fromMaybe)
 
+import Debug.Trace
+
 data KernelOptions = KernelOptions 
     { patHorShift :: Maybe Int
     , patVerShift :: Maybe Int
@@ -253,22 +255,24 @@ convgrid3 wkerns akerns a p index v =
         halfgh = gh `div` 2
         halfgw = gw `div` 2
 
-        --Gather the coords, make them into ints and fractions and zip with visability
+        --Gather the coords, make them into ints and fractions and zip with visibility
         coords = frac_coords (lift (height, width)) qpx p
         (cx, cxf, cy, cyf) = unzip4 coords
         dat = zip5 cx cxf cy cyf v
 
-        -- We reuse this on a lot, so compile it
+        -- We reuse this one a lot, so compile it
         processer = CPU.runN processOne
+        index02 = CPU.runN (\i -> unit $ index !! the i)
+        dat02   = CPU.runN (\i -> unit $ dat   !! the i)
 
-        index0 i = CPU.run . unit $ index !! i
-        dat0 i = CPU.run . unit $ dat !! i
+        dat0 i = dat02 (fromList Z [i])
+        index0 i = index02 (fromList Z [i])
         wkerns' = CPU.run wkerns
         akerns' = CPU.run akerns
         a' = CPU.run a
         n' = P.head . toList .CPU.run . unit $  n
 
-        processi i = processer (index0 (constant i)) (dat0 (constant i)) wkerns' akerns'
+        processi i = processer (index0 i) (dat0 i) wkerns' akerns'
 
         result = myfor n' processi a'
         

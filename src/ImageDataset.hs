@@ -42,13 +42,13 @@ aw_gridding wfile afile datfile = do
         v = slice uvwmat (constant (Z :. All :. (1 :: Int)))
         w = slice uvwmat (constant (Z :. All :. (2 :: Int)))
         uvw0 = zip3 u v w
-        m = 4
-        myuvw = (take m $ uvw0)
-        mysrc = (take m $ src0)
-        myvis = (take m $ use vis)
+        myuvw = (uvw0)
+        mysrc = (src0)
+        myvis = (use vis)
         testing = CPU.run $ aw_imaging args oargs theta lam myuvw mysrc myvis
     P.putStrLn "Start imaging"
-    return testing 
+    --P.putStrLn $ printf "myuvw: %s\n mysrc: %s \n mvis: %s" (P.show . CPU.run . unit . shape $ u) (P.show . CPU.run . unit . shape $ src0) (P.show . CPU.run $ myvis)
+    return testing
 
     where
         readVis :: String -> IO (Vector Visibility)
