@@ -19,13 +19,16 @@ import Data.Array.Accelerate.Debug                        as A
 import qualified Prelude as P
 import Prelude as P (fromIntegral, fromInteger, fromRational, String, return, (>>=), (>>), IO, Maybe(..), maybe)
 import qualified Data.List as L (sort,(!!),sortBy)
+import Data.Time.Clock
 
 --aw_gridding :: String -> String -> String -> IO Image
-aw_gridding :: String -> String -> String -> IO FourierSpace
-aw_gridding wfile afile datfile = do
-    setFlag dump_phases
-    let theta    = 0.08
-        lam      = 180
+aw_gridding :: String -> String -> String -> Maybe Int -> IO (Scalar F)
+aw_gridding wfile afile datfile n = do
+    --setFlag dump_phases
+    let theta    = 0.008
+        lam      = 300000
+    ts <- getCurrentTime
+    P.putStrLn $ P.show ts
     vis <- readVis datfile 
     uvw <- readBaselines datfile
     (a1,a2,ts,f) <- readSource datfile
@@ -34,21 +37,39 @@ aw_gridding wfile afile datfile = do
     wkerns <- getWKernels wfile theta
     let oargs = noOtherArgs{akernels = Just akerns, wkernels = Just wkerns}
         args = noArgs
-        (res, _, _) =CPU.run $ do_imaging theta lam uvw a1 a2 ts f vis (aw_imaging args oargs)
-        len = arrayShape vis
-        src0 = zip4 (use a1) (use a2) (use ts) (fill (lift len) (constant f))
+        --(res, _, _) =CPU.run $ do_imaging theta lam uvw a1 a2 ts f vis (aw_imaging args oargs)
+        len = constant . maybe (arraySize vis) P.id $ n
+        len_ = lift (Z :. len) :: Exp DIM1
+        --len = arrayShape vis
+        src0 = zip4 (use a1) (use a2) (use ts) (fill len_ (constant f))
         uvwmat = use uvw
         u = slice uvwmat (constant (Z :. All :. (0 :: Int)))
         v = slice uvwmat (constant (Z :. All :. (1 :: Int)))
         w = slice uvwmat (constant (Z :. All :. (2 :: Int)))
-        uvw0 = zip3 u v w
-        myuvw = (uvw0)
-        mysrc = (src0)
-        myvis = (use vis)
-        testing = CPU.run $ aw_imaging args oargs theta lam myuvw mysrc myvis
+        uvw0 = take len $ zip3 u v w
+        vis0 = take len $ use vis
+
+        ones = fill len_ 1
+        wt = doweight theta lam uvw0 ones
+        (uvw1,vis1) = unzip $ mirror_uvw uvw0 vis0
+
+        myuvw = uvw1
+        mysrc = src0
+        myvis = vis1
+        uvgrid = aw_imaging args oargs theta lam myuvw mysrc myvis
+
+        uvgrid1 = make_grid_hermitian uvgrid
+
+        img = map real . ifft $ uvgrid1
+        
+        max = (maximum . flatten) img
+        (imgrun, maxrun) = CPU.run $ lift (img,max)
+
     P.putStrLn "Start imaging"
+    --createh5File "result.h5"
+    --createDatasetDouble "result.h5" "/result1" imgrun
     --P.putStrLn $ printf "myuvw: %s\n mysrc: %s \n mvis: %s" (P.show . CPU.run . unit . shape $ u) (P.show . CPU.run . unit . shape $ src0) (P.show . CPU.run $ myvis)
-    return testing
+    return maxrun
 
     where
         readVis :: String -> IO (Vector Visibility)

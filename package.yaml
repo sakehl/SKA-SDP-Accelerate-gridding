@@ -28,6 +28,7 @@ dependencies:
   - lens
   - vector
   - directory
+  - time
 
 library:
   source-dirs: src

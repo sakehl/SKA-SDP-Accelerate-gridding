@@ -36,9 +36,9 @@ remover fileName = removeFile fileName `catch` handle
 testIO :: IO Bool
 testIO = do
     let filename = "test.h5"
-    let datasetD = "\testD"
-    let datasetC = "\testC"
-    let dataset3 = "\test3"
+    let datasetD = "/testD"
+    let datasetC = "/testC"
+    let dataset3 = "/test3"
     remover filename
     createh5File filename
     createDatasetDouble filename datasetD testData

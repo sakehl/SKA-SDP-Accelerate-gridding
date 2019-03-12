@@ -293,7 +293,7 @@ processOne
             a1 = slice akerns (lift (Z :. a1index :. All :. All))
             a2 = slice akerns (lift (Z :. a2index :. All :. All))
             w  = slice wkerns (lift (Z :. wbin :. All :. All :. All :. All))
-            -- NOTE, the conjugate normally happens in imaging function, but it is confinient to do it here.
+            -- NOTE, the conjugate normally happens in imaging function, but it is convenient to do it here.
             awkern = map conjugate $ aw_kernel_fn2 yf xf w a1 a2
             
             --Start at the right coordinates
