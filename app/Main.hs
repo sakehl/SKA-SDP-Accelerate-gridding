@@ -11,10 +11,10 @@ main = do
     remover "result.h5"
     args <- getArgs
     let n = case args of
-                [] -> Just 50
+                [] -> Just 500
                 "all":_ -> Nothing
                 x:_ -> Just $ read x
-    fourier <- aw_gridding "data/SKA1_Low_wkern2.h5" "data/SKA1_Low_akern2.h5" "data/SKA1_Low_quick.h5" n
+    fourier <- aw_gridding "data/SKA1_Low_wkern2.h5" "data/SKA1_Low_akern3.h5" "data/SKA1_Low_quick.h5" n
     putStrLn (show fourier)
 
 
