@@ -12,8 +12,8 @@ import Data.Array.Accelerate.Data.Complex                 as A
 import Data.Array.Accelerate.Math.DFT.Centre              as A
 import Data.Array.Accelerate.Math.FFT                     as A
 
-import Data.Array.Accelerate.LLVM.Native                  as CPU
-import Data.Array.Accelerate.Interpreter                  as I
+import qualified Data.Array.Accelerate.LLVM.Native        as CPU
+import qualified Data.Array.Accelerate.Interpreter        as I
 import Data.Array.Accelerate.Debug                        as A
 
 import qualified Prelude as P
@@ -22,8 +22,8 @@ import qualified Data.List as L (sort,(!!),sortBy)
 import Data.Time.Clock
 
 --aw_gridding :: String -> String -> String -> IO Image
-aw_gridding :: String -> String -> String -> Maybe Int -> IO (Scalar F)
-aw_gridding wfile afile datfile n = do
+aw_gridding :: Runners (String -> String -> String -> Maybe Int -> IO (Scalar F))
+aw_gridding run runN wfile afile datfile n = do
     --setFlag dump_phases
     let theta    = 0.008
         lam      = 300000
@@ -56,15 +56,16 @@ aw_gridding wfile afile datfile n = do
         myuvw = uvw1
         mysrc = src0
         myvis = vis1
-        uvgrid = aw_imaging args oargs theta lam myuvw mysrc myvis
+        uvgrid = aw_imaging run runN args oargs theta lam myuvw mysrc myvis
 
         uvgrid1 = make_grid_hermitian uvgrid
 
         img = map real . ifft $ uvgrid1
         
         max = (maximum . flatten) img
-        (imgrun, maxrun) = CPU.run $ lift (img,max)
+        (imgrun, maxrun) = run $ (lift (img,max) :: Acc (Matrix F, Scalar F))
 
+    P.putStrLn (P.show $ run $ minimum . map real . flatten $ uvgrid)
     P.putStrLn "Start imaging"
     --createh5File "result.h5"
     --createDatasetDouble "result.h5" "/result1" imgrun

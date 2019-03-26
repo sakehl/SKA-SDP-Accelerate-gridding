@@ -3,6 +3,7 @@
 {-# language ScopedTypeVariables #-}
 {-# language TypeOperators       #-}
 {-# language ViewPatterns        #-}
+{-# LANGUAGE Rank2Types #-}
 
 module Gridding where
 
@@ -24,6 +25,7 @@ import Control.Lens as L (_1, _2, _3, _4, _5)
 import Data.Maybe (fromJust, fromMaybe)
 
 import Debug.Trace
+type Runners b = (forall a . Arrays a => Acc a -> a) -> (forall f . Afunction f => f -> AfunctionR f) -> b
 
 data KernelOptions = KernelOptions 
     { patHorShift :: Maybe Int
@@ -241,14 +243,16 @@ convgrid2 gcf a p wbin v =
                  , vis * gcf ! lift (Z :. wbin :. yf :. xf :. i :. j) )
     in permute (+) a indexer val
 
-convgrid3 :: Acc (Array DIM5 Visibility)        -- The oversampled convolution w-kernel
+convgrid3 :: Runners (
+             Acc (Array DIM5 Visibility)        -- The oversampled convolution w-kernel
           -> Acc (Array DIM3 Visibility)        -- The a-kernels
           -> Acc (Matrix Visibility)            -- Destination grid N x N of complex numbers
           -> Acc (Vector BaseLines)             -- The uvw baselines, but between -.5 and .5
           -> Acc (Vector (Int, Int, Int))       -- *DIF* The wbin index of the convolution kernel and the index of the a-kernels
           -> Acc (Vector Visibility)            -- The visiblities
           -> Acc (Matrix Visibility)
-convgrid3 wkerns akerns a p index v =
+        )
+convgrid3 run runN wkerns akerns a p index v =
     let Z :. _ :. qpx :. _ :. gh :. gw = unlift (shape wkerns) :: Z :. Exp Int :. Exp Int :. Exp Int :. Exp Int :. Exp Int
         Z :. height :. width = unlift (shape a) :: Z :. Exp Int :. Exp Int
         Z :. n = unlift (shape v) :: Z :. Exp Int
@@ -261,17 +265,20 @@ convgrid3 wkerns akerns a p index v =
         dat = zip5 cx cxf cy cyf v
 
         -- We reuse this one a lot, so compile it
-        processer = CPU.runN processOne
-        index02 = CPU.runN (\i -> unit $ index !! the i)
-        dat02   = CPU.runN (\i -> unit $ dat   !! the i)
+        processer = runN processOne
+        index02 = runN (\i -> unit $ index !! the i)
+        dat02   = runN (\i -> unit $ dat   !! the i)
 
         dat0 i = dat02 (fromList Z [i])
         index0 i = index02 (fromList Z [i])
-        wkerns' = CPU.run wkerns
-        akerns' = CPU.run akerns
-        a' = CPU.run a
-        n' = P.head . toList .CPU.run . unit $  n
-
+        wkerns' = run wkerns
+        akerns' = run akerns
+        a' = run a
+        n' = P.head . toList .run . unit $  n
+        {-
+        processi i | i `P.mod` 1000 P.== 0 = trace (printf "We are processing number %i now (total: %i)" t0) i n') 
+                            $ processer (index0 i) (dat0 i) wkerns' akerns'
+                   | otherwise = processer (index0 i) (dat0 i) wkerns' akerns'-}
         processi i = processer (index0 i) (dat0 i) wkerns' akerns'
 
         result = myfor n' processi a'
@@ -375,8 +382,8 @@ w_cache_imaging kernops@KernelOptions{wstep = wstep'}
     in convgrid2 (use thekernels) guv p wbins vis
 
 -- Imaging with aw-caches
-aw_imaging :: KernelOptions -> OtherImagingArgs -> ImagingFunction
-aw_imaging kernops@KernelOptions{wstep = wstep', qpx = qpx'}
+aw_imaging :: Runners (KernelOptions -> OtherImagingArgs -> ImagingFunction)
+aw_imaging run runN kernops@KernelOptions{wstep = wstep', qpx = qpx'}
   otargs@OtherImagingArgs{akernels = akernels'
                          ,wkernels = wkernels'}
   theta lam uvw src vis =
@@ -397,7 +404,7 @@ aw_imaging kernops@KernelOptions{wstep = wstep', qpx = qpx'}
         (a1, a2, _, _) = unzip4 src
         index = zipWith3 (\x y z -> lift (x, A.fromIntegral y, A.fromIntegral z)) closestw a1 a2
         --Normally we conjugate the kernel here, but we do it later on in the convgrid3 (or processOne) function somewhere
-    in convgrid3 (use wkernels) (use akernels) guv p index vis
+    in convgrid3 run runN (use wkernels) (use akernels) guv p index vis
     
 ----------------------------------
 -- Processing the imaging functions
@@ -658,7 +665,6 @@ aw_kernel_fn2 yf xf wkern a1kern a2kern =
 convolve2d :: Acc (Matrix Visibility) -> Acc (Matrix Visibility) -> Acc (Matrix Visibility)
 convolve2d a1 a2 = 
     let
-        --Actually I expect 
         (Z :. n :. _) = (unlift . shape) a1 :: Z :. Exp Int :. Exp Int
         n2 = A.fromIntegral $ n * n
 
@@ -732,3 +738,23 @@ findClosest ws w =
         
         (r1, r2) = unlift . while cmp f $ minmax :: (Exp Int, Exp Int)
     in if abs (w - ws !! r1) < abs (w - ws !! r2) then r1 else r2
+
+
+proccesOne2 ::  Acc (Array DIM3 Visibility) -> Acc (Array DIM3 Visibility) -> Acc (Scalar (Int, Int, Int, Visibility)) ->  Acc (Matrix Visibility)
+proccesOne2 wkerns akerns 
+    (unlift . the -> (wbin, a1index, a2index, vis) :: (Exp Int, Exp Int, Exp Int, Exp Visibility)) =
+        let Z :. _ :. gh :. gw = unlift (shape wkerns) :: Z :. Exp Int :. Exp Int :. Exp Int
+            halfgh = gh `div` 2
+            halfgw = gw `div` 2
+            
+            --Get the right a and w kernels
+            a1 = slice akerns (lift (Z :. a1index :. All :. All))
+            a2 = slice akerns (lift (Z :. a2index :. All :. All))
+            w  = slice wkerns (lift (Z :. wbin :. All :. All))
+            --Convolve them
+            akern = convolve2d a1 a2
+            awkern = convolve2d w akern
+
+            -- Let the visibility have the same dimensions as the aw-kernel
+            allvis = replicate ( lift ( Z :. gh :. gw)) (unit vis)
+        in zipWith (*) allvis awkern
