@@ -1,0 +1,68 @@
+# For advanced use and comprehensive documentation of the format, please see:
+# https://docs.haskellstack.org/en/stable/yaml_configuration/
+
+# Resolver to choose a specific stackage snapshot or a compiler version
+resolver: lts-13.5
+
+# User packages to be built
+packages:
+- .
+
+# Dependency packages to be pulled from upstream that are not in the resolver
+extra-deps:
+- git:    https://github.com/tmcdonell/accelerate.git
+  commit: d948d737683bc2f340b56319a4412505274502fc
+
+- git:    https://github.com/tmcdonell/accelerate-llvm.git
+  commit: a7a5c89a35f766dd14f6f2a982ea165bed0fcac1
+  subdirs:
+    - accelerate-llvm
+    - accelerate-llvm-native
+    - accelerate-llvm-ptx
+
+- git:    https://github.com/tmcdonell/accelerate-fft.git
+  commit: 782a873c000a89fd521e1ce4107daaf14bdc819d
+
+- git:    https://github.com/tmcdonell/lens-accelerate.git
+  commit: b74eb8098735b1ad6cff3c5655af03d3f29b9f8e
+
+- git: https://github.com/AccelerateHS/accelerate-io.git  
+  commit: 15c67bf66bf44bc0d6567b0d6f41338bffa178c8
+
+- llvm-hs-7.0.1
+
+- vector-0.12.0.1
+
+# Override default flag values for local packages and extra-deps
+flags:
+  accelerate:
+    debug: true
+  accelerate-fft:
+    llvm-ptx: true
+    llvm-cpu: false
+#  accelerate-llvm-native:
+#    unsafe-checks: true
+#    internal-checks: true
+
+# Extra package databases containing global packages
+# extra-package-dbs: []
+
+# Control whether we use the GHC we find on the path
+# system-ghc: true
+#
+# Require a specific version of stack, using version ranges
+# require-stack-version: -any # Default
+# require-stack-version: ">=1.9"
+#
+# Override the architecture used by stack, especially useful on Windows
+# arch: i386
+# arch: x86_64
+#
+# Extra directories used by stack for building
+# extra-include-dirs: [/path/to/dir]
+# extra-lib-dirs: [/path/to/dir]
+#
+# Allow a newer minor version of GHC than the snapshot specifies
+# compiler-check: newer-minor
+
+# vim: nospell

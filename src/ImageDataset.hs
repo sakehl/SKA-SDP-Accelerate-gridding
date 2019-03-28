@@ -62,7 +62,6 @@ aw_gridding run runN wfile afile datfile n = do
         uvgrid1 = make_grid_hermitian uvgrid
 
         img = run . map real . ifft $ uvgrid1
-        
         max = run . maximum . flatten . use $ img
     P.putStrLn "Start imaging"
     createh5File "result.h5"
@@ -77,7 +76,6 @@ aw_gridding run runN wfile afile datfile n = do
             let size = arraySize v
                 sh   = arrayShape v
                 newv = arrayReshape (Z :. size :: DIM1) v
-            P.putStrLn . P.show $ sh 
             return newv
 
         readBaselines :: String -> IO (Matrix BaseLine)

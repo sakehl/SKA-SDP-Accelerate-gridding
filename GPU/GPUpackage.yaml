@@ -23,6 +23,7 @@ dependencies:
   - base >= 4.7 && < 5
   - accelerate
   - accelerate-llvm-native
+  - accelerate-llvm-ptx
   - accelerate-fft
   - accelerate-io
   - lens
@@ -46,7 +47,7 @@ executables:
       - -threaded
       - -rtsopts
       - -with-rtsopts=-N
-      - -with-rtsopts=-sstderr
+      - -with-rtsopts=sstderr
       - -O2
     dependencies:
       - ska-sdp-accelerate
