@@ -582,7 +582,7 @@ kernel_oversample ff n qpx s =
     in extract_oversampled af qpx s
 
 pad_mid :: Acc (Matrix Visibility)    -- The input far field. Should be smaller than NxN
-        -> Exp Int                          -- The desired far field size
+        -> Exp Int                    -- The desired far field size
         -> Acc (Matrix Visibility)    -- The far field, NxN
 pad_mid ff n =
     let
@@ -591,6 +591,22 @@ pad_mid ff n =
         pad_width = lift ((n `div` 2)-(n0 `div` 2), ((n+1) `div` 2)-((n0+1) `div` 2))
         padded = padder ff pad_width pad_width 0
     in result
+
+--Extract a section from middle of a map Suitable for zero frequencies at N/2. This is the reverse operation to pad.
+extract_mid :: Acc (Matrix Visibility)  -- grid from which to extract
+            -> Exp Int                  -- size of section
+            -> Acc (Matrix Visibility)
+extract_mid a n = 
+    let
+        Z :. x :. y = (unlift. shape) a :: Z :. Exp Int :. Exp Int
+        cx = x `div` 2
+        cy = y `div` 2
+        s  = n `div` 2
+        --o  = if odd n then 1 else 0
+        res = slitOn _1 (cx -s) n . slitOn _2 (cy -s) n $ a
+        --r1 = dropOn _1 (cx -s) . takeOn _1 (cx + s + o) $ a
+        --res = dropOn _2 (cy -s) . takeOn _2 (cy + s + o) $ r1
+    in res  
 
 extract_oversampled :: Acc (Matrix Visibility)        -- grid from which to extract
                     -> Exp Int                              -- oversampling factor
@@ -662,26 +678,62 @@ aw_kernel_fn2 yf xf wkern a1kern a2kern =
 
 -- the kernels for Aw-gridding will normally be chosen to /not/ overflow the borders 
 -- Thus we chose the simpler method
+convolve2dO :: Acc (Matrix Visibility) -> Acc (Matrix Visibility) -> Acc (Matrix Visibility)
+convolve2dO a1 a2 = 
+    let
+        (Z :. n_ :. _) = (unlift . shape) a1 :: Z :. Exp Int :. Exp Int
+        pw = A.ceiling (logBase 2 (A.fromIntegral n_) :: Exp F) :: Exp Int
+        n = 2 ^ pw :: Exp Int
+        n2 = A.fromIntegral $ n * n
+
+        a1fft = fft2D Inverse . ishift2D $ pad_mid a1 n
+        a2fft = fft2D Inverse . ishift2D $ pad_mid a2 n
+        a1a2 = zipWith (*) a1fft a2fft
+        convolved = shift2D . fft2D Forward $ a1a2
+        mid = extract_mid convolved n_
+    in map (*n2) mid
+
+-- More precise method
 convolve2d :: Acc (Matrix Visibility) -> Acc (Matrix Visibility) -> Acc (Matrix Visibility)
 convolve2d a1 a2 = 
     let
         (Z :. n :. _) = (unlift . shape) a1 :: Z :. Exp Int :. Exp Int
-        n2 = A.fromIntegral $ n * n
+        m_ = 2*n - 1
+        -- We need m to be a power of 2
+        pw = A.ceiling (logBase 2 (A.fromIntegral m_) :: Exp F) :: Exp Int
+        m = 2 ^ pw
+        m2 = A.fromIntegral $ m * m
+        
 
-        a1fft = fft2D Inverse . ishift2D $ a1
-        a2fft = fft2D Inverse . ishift2D $ a2
+        a1fft = fft2D Inverse . ishift2D $ pad_mid a1 m
+        a2fft = fft2D Inverse . ishift2D $ pad_mid a2 m
         a1a2 = zipWith (*) a1fft a2fft
         convolved = shift2D . fft2D Forward $ a1a2
-    in map (*n2) convolved
-
+        mid = extract_mid convolved n
+    in map (*m2) mid
 
 ----------------------
 -- Fourier transformations
+fftO :: Acc (Matrix Visibility) -> Acc (Matrix Visibility)
+fftO = shift2D . fft2D Forward . ishift2D
+
+ifftO :: Acc (Matrix Visibility) -> Acc (Matrix Visibility)
+ifftO = shift2D . fft2D Inverse . ishift2D
+
 fft :: Acc (Matrix Visibility) -> Acc (Matrix Visibility)
-fft = shift2D . fft2D Forward . ishift2D
+fft m = (`extract_mid` n_) . shift2D . fft2D Forward . ishift2D . (`pad_mid` n) $ m
+    where
+        (Z :. n_ :. _) = (unlift . shape) m :: Z :. Exp Int :. Exp Int
+        pw = A.ceiling (logBase 2 (A.fromIntegral n_) :: Exp F) :: Exp Int
+        n = 2 ^ pw :: Exp Int
 
 ifft :: Acc (Matrix Visibility) -> Acc (Matrix Visibility)
-ifft = shift2D . fft2D Inverse . ishift2D
+ifft m = shift2D . fft2D Inverse . ishift2D $ m
+--ifft m = (`extract_mid` n_) . shift2D . fft2D Inverse . ishift2D . (`pad_mid` n) $ m
+    where
+        (Z :. n_ :. _) = (unlift . shape) m :: Z :. Exp Int :. Exp Int
+        pw = A.ceiling (logBase 2 (A.fromIntegral n_) :: Exp F) :: Exp Int
+        n = 2 ^ pw :: Exp Int
 
 ------------------------
 -- Helper functions
@@ -700,7 +752,7 @@ padder :: Elt a => Acc (Matrix a) -> Exp (Int, Int) -> Exp (Int, Int) -> Exp a -
 padder array pad_width_x pad_width_y constant_val =
     let
         (x0, x1) = unlift pad_width_x :: (Exp Int, Exp Int)
-        (y0, y1) = unlift pad_width_x :: (Exp Int, Exp Int)
+        (y0, y1) = unlift pad_width_y :: (Exp Int, Exp Int)
         Z :. m :. n = (unlift . shape) array :: ( Z :. Exp Int :. Exp Int)
         def = fill (index2 (m + y0 + y1) (n + x0 + x1)) constant_val
 
@@ -740,8 +792,8 @@ findClosest ws w =
     in if abs (w - ws !! r1) < abs (w - ws !! r2) then r1 else r2
 
 
-proccesOne2 ::  Acc (Array DIM3 Visibility) -> Acc (Array DIM3 Visibility) -> Acc (Scalar (Int, Int, Int, Visibility)) ->  Acc (Matrix Visibility)
-proccesOne2 wkerns akerns 
+processOne2 ::  Acc (Array DIM3 Visibility) -> Acc (Array DIM3 Visibility) -> Acc (Scalar (Int, Int, Int, Visibility)) ->  Acc (Matrix Visibility)
+processOne2 wkerns akerns 
     (unlift . the -> (wbin, a1index, a2index, vis) :: (Exp Int, Exp Int, Exp Int, Exp Visibility)) =
         let Z :. _ :. gh :. gw = unlift (shape wkerns) :: Z :. Exp Int :. Exp Int :. Exp Int
             halfgh = gh `div` 2

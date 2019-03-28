@@ -1,4 +1,6 @@
 {-# language TypeOperators       #-}
+{-# language ViewPatterns        #-}
+{-# language ScopedTypeVariables #-}
 module ImageDataset where
 
 import Types
@@ -27,8 +29,8 @@ aw_gridding run runN wfile afile datfile n = do
     --setFlag dump_phases
     let theta    = 0.008
         lam      = 300000
-    ts <- getCurrentTime
-    P.putStrLn $ P.show ts
+    tim <- getCurrentTime
+    P.putStrLn $ P.show tim
     vis <- readVis datfile 
     uvw <- readBaselines datfile
     (a1,a2,ts,f) <- readSource datfile
@@ -37,19 +39,18 @@ aw_gridding run runN wfile afile datfile n = do
     wkerns <- getWKernels wfile theta
     let oargs = noOtherArgs{akernels = Just akerns, wkernels = Just wkerns}
         args = noArgs
-        --(res, _, _) =CPU.run $ do_imaging theta lam uvw a1 a2 ts f vis (aw_imaging args oargs)
         len = constant . maybe (arraySize vis) P.id $ n
         len_ = lift (Z :. len) :: Exp DIM1
-        --len = arrayShape vis
         src0 = zip4 (use a1) (use a2) (use ts) (fill len_ (constant f))
         uvwmat = use uvw
         u = slice uvwmat (constant (Z :. All :. (0 :: Int)))
         v = slice uvwmat (constant (Z :. All :. (1 :: Int)))
         w = slice uvwmat (constant (Z :. All :. (2 :: Int)))
-        uvw0 = take len $ zip3 u v w
+        uvw0 = uvw_lambda f . take len $ zip3 u v w
         vis0 = take len $ use vis
 
         ones = fill len_ 1
+
         wt = doweight theta lam uvw0 ones
         (uvw1,vis1) = unzip $ mirror_uvw uvw0 vis0
 
@@ -60,24 +61,23 @@ aw_gridding run runN wfile afile datfile n = do
 
         uvgrid1 = make_grid_hermitian uvgrid
 
-        img = map real . ifft $ uvgrid1
+        img = run . map real . ifft $ uvgrid1
         
-        max = (maximum . flatten) img
-        (imgrun, maxrun) = run $ (lift (img,max) :: Acc (Matrix F, Scalar F))
-
-    P.putStrLn (P.show $ run $ minimum . map real . flatten $ uvgrid)
+        max = run . maximum . flatten . use $ img
     P.putStrLn "Start imaging"
-    --createh5File "result.h5"
-    --createDatasetDouble "result.h5" "/result1" imgrun
-    --P.putStrLn $ printf "myuvw: %s\n mysrc: %s \n mvis: %s" (P.show . CPU.run . unit . shape $ u) (P.show . CPU.run . unit . shape $ src0) (P.show . CPU.run $ myvis)
-    return maxrun
+    createh5File "result.h5"
+    createDatasetDouble "result.h5" "/img" img
+    --return maxrun
+    return $ max
 
     where
         readVis :: String -> IO (Vector Visibility)
         readVis file = do
             v <- readDatasetComplex file "/vis/vis" :: IO (Array DIM3 Visibility)
             let size = arraySize v
+                sh   = arrayShape v
                 newv = arrayReshape (Z :. size :: DIM1) v
+            P.putStrLn . P.show $ sh 
             return newv
 
         readBaselines :: String -> IO (Matrix BaseLine)
@@ -136,9 +136,6 @@ getWKernels file theta = do
     P.putStrLn "W kernels loaded"
     return (wkerns, wbinsv)
 
-
-
-
 -- Some helpers
 findClosestList :: (P.Num a, P.Ord a) => [a] -> a -> (a, Int)
 findClosestList ws w =
@@ -168,3 +165,12 @@ convertAndSort xs = let
     converted = P.map (\x -> (P.read x, x) ) xs
     sorter (a,_) (b,_) = P.compare a b
     in L.sortBy sorter converted
+
+
+uvw_lambda :: Frequency -> Acc (Vector BaseLines) -> Acc (Vector BaseLines)
+uvw_lambda f uvw = map mapper uvw
+    where
+        mapper :: Exp BaseLines -> Exp BaseLines
+        mapper (unlift -> (u,v,w) :: (Exp F, Exp F, Exp F)) = lift (a * u,a *v, a * w)
+        -- We divide by the speed of light and multiply with frequency
+        a = constant $ f / 299792458.0

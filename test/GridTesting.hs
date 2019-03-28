@@ -17,12 +17,16 @@ import Data.Array.Accelerate.Interpreter                  as I
 import Data.Array.Accelerate.Debug                        as A
 
 import Gridding
+import Types
+import Hdf5
+import ImageDataset
 
 import qualified Prelude as P
-import Prelude as P (fromIntegral, fromInteger, fromRational, String, return, (>>=), (>>), IO, Maybe(..))
+import Prelude as P (fromIntegral, fromInteger, fromRational, String, return, (>>=), (>>), IO, Maybe(..), maybe)
 import Data.Char (isSpace)
 import Text.Printf
 import Data.List (intercalate)
+import Data.Time.Clock
 
 import Debug.Trace
 import System.IO.Unsafe (unsafePerformIO)
@@ -446,3 +450,127 @@ testConcat =
                    in replicate (constant (Any :. (1::Int) :. (4::Int))) myi
         cpusteps = 3
     in myfor (cpusteps - 1) (\i old -> concatOn _2 (mylist i) old) (mylist (cpusteps - 1))
+
+-- Extensive img data set things
+aw_gridding :: Runners (String -> String -> String -> Maybe Int -> IO (Scalar F))
+aw_gridding run runN wfile afile datfile n = do
+    --setFlag dump_phases
+    let theta    = 0.008
+        lam      = 300000
+    tim <- getCurrentTime
+    P.putStrLn $ P.show tim
+    vis <- readVis datfile 
+    uvw <- readBaselines datfile
+    (a1,a2,ts,f) <- readSource datfile
+    let t = linearIndexArray ts 0
+    akerns <- getAKernels afile theta t f
+    wkerns <- getWKernels wfile theta
+    let oargs = noOtherArgs{akernels = Just akerns, wkernels = Just wkerns}
+        args = noArgs
+        --(res, _, _) =run $ do_imaging theta lam uvw a1 a2 ts f vis (aw_imaging args oargs)
+        len = constant . maybe (arraySize vis) P.id $ n
+        len_ = lift (Z :. len) :: Exp DIM1
+        --len = arrayShape vis
+        src0 = zip4 (use a1) (use a2) (use ts) (fill len_ (constant f))
+        uvwmat = use uvw
+        u = slice uvwmat (constant (Z :. All :. (0 :: Int)))
+        v = slice uvwmat (constant (Z :. All :. (1 :: Int)))
+        w = slice uvwmat (constant (Z :. All :. (2 :: Int)))
+        uvw0 = uvw_lambda f . take len $ zip3 u v w
+        vis0 = take len $ use vis
+
+        ones = fill len_ 1
+        wt = doweight theta lam uvw0 ones
+        (uvw1,vis1) = unzip $ mirror_uvw uvw0 vis0
+
+        myuvw = uvw1
+        mysrc = src0
+        myvis = vis1
+        uvgrid = aw_imaging run runN args oargs theta lam myuvw mysrc myvis
+
+        uvgrid1 = make_grid_hermitian uvgrid
+
+        img = map real . ifft $ uvgrid1
+        
+        max = (maximum . flatten) img
+        (imgrun, maxrun) = run $ (lift (img,max) :: Acc (Matrix F, Scalar F))
+
+        akern1 = slice (use akerns) (constant (Z :. (0 :: Int) :. All :. All))
+        akern2 = slice (use akerns) (constant (Z :. (1 :: Int) :. All :. All))
+        wkern  = slice (use (P.fst wkerns)) (constant (Z :. (0 :: Int) :. (0 :: Int):. (0 :: Int):. All :. All))
+        awkern = convolve2d wkern (convolve2d akern1 akern2)
+ 
+        wbins = P.snd wkerns
+        lamf = fromIntegral lam
+        nn = constant . P.round $ theta * lamf
+
+        p = map (`div3` constant lamf) myuvw
+        guv = fill (index2 nn nn) 0 :: Acc (Matrix Visibility)
+
+        (_,_,ww) = unzip3 myuvw
+        closestw = map (findClosest (use wbins)) ww
+        (a11, a22, _, _) = unzip4 mysrc
+        index = zipWith3 (\x y z -> lift (x, A.fromIntegral y, A.fromIntegral z)) closestw a11 a22 :: Acc (Vector (Int, Int, Int))
+
+        Z :. _ :. qpx :. _ :. gh :. gw = unlift . shape . use . P.fst $ wkerns :: Z :. Exp Int :. Exp Int :. Exp Int :. Exp Int :. Exp Int
+        Z :. height :. width = unlift (shape guv) :: Z :. Exp Int :. Exp Int
+        halfgh = gh `div` 2
+        halfgw = gw `div` 2
+        coords = frac_coords (lift (height, width)) qpx p
+        (cx, cxf, cy, cyf) = unzip4 coords
+        dat = zip5 cx cxf cy cyf myvis
+
+        (unlift -> (x, xf, y, yf, vis_) :: (Exp Int, Exp Int, Exp Int, Exp Int, Exp Visibility) ) = dat !! 0 
+
+        (unlift -> (wbin, a1index, a2index)  :: (Exp Int, Exp Int, Exp Int)) = index !! 0 
+        
+        a1_ = slice (use akerns) (lift (Z :. a1index :. All :. All))
+        a2_ = slice (use akerns) (lift (Z :. a2index :. All :. All))
+        w_  = slice (use (P.fst wkerns)) (lift (Z :. wbin :. All :. All :. All :. All))
+        
+        awkern2 = map conjugate $ aw_kernel_fn2 yf xf w_ a1_ a2_
+        
+
+    --P.putStrLn (P.show $ run $ minimum . map real . flatten $ uvgrid)
+    P.putStrLn "Start imaging"
+    --createh5File "result.h5"
+    --createDatasetDouble "result.h5" "/img" imgrun
+    createh5File "convolveTest.h5"
+    --createDatasetComplex "convolveTest.h5" "/a0" (run $ a1_)
+    --createDatasetComplex "convolveTest.h5" "/a1" (run $ a2_)
+    --createDatasetComplex "convolveTest.h5" "/w" (run $ w_)
+    --createDatasetComplex "convolveTest.h5" "/aw" (run $ awkern)
+    createDatasetComplex "convolveTest.h5" "/uvgrid" (run $ uvgrid)
+    createDatasetComplex "convolveTest.h5" "/awkern" (run $ awkern2)
+    createDatasetComplex "convolveTest.h5" "/herm" (run $ uvgrid1)
+    createDatasetDouble "convolveTest.h5" "/img" imgrun
+    --P.putStrLn $ printf "myuvw: %s\n mysrc: %s \n mvis: %s" (P.show . CPU.run . unit . shape $ u) (P.show . CPU.run . unit . shape $ src0) (P.show . CPU.run $ myvis)
+    P.mapM P.putStrLn . P.map P.show . toList . CPU.run $ uvw1
+    P.putStrLn . P.show . CPU.run $ unit $ lift ((use wbins) !! (closestw !! 0), a11 !! 0, a22 !! 0)
+    P.putStrLn . P.show . CPU.run $ coords
+    --return maxrun
+    return $ fromList Z [1.0]
+
+    where
+        readVis :: String -> IO (Vector Visibility)
+        readVis file = do
+            v <- readDatasetComplex file "/vis/vis" :: IO (Array DIM3 Visibility)
+            let size = arraySize v
+                sh   = arrayShape v
+                newv = arrayReshape (Z :. size :: DIM1) v
+            P.putStrLn . P.show $ sh 
+            return newv
+
+        readBaselines :: String -> IO (Matrix BaseLine)
+        readBaselines file = do
+            r <- readDatasetDouble file "/vis/uvw"
+            return r
+
+        readSource :: String -> IO (Vector Antenna, Vector Antenna, Vector Time, Frequency)
+        readSource file = do
+            a1 <- readDatasetInt64 file "/vis/antenna1" :: IO (Vector Antenna)
+            a2 <- readDatasetInt64 file "/vis/antenna2" :: IO (Vector Antenna)
+            t  <- readDatasetDouble file "/vis/time" :: IO (Vector Time)
+            f  <- readDatasetDouble file "/vis/frequency" :: IO (Vector Frequency)
+            let f0 = linearIndexArray f 0
+            return (a1, a2, t, f0)
