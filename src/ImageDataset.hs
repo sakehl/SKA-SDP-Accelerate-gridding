@@ -57,7 +57,7 @@ aw_gridding run runN wfile afile datfile n = do
         myuvw = uvw1
         mysrc = src0
         myvis = vis1
-        uvgrid = aw_imaging run runN args oargs theta lam myuvw mysrc myvis
+        uvgrid = aw_imaging run runN args oargs theta lam myuvw mysrc (zipWith (*) myvis wt)
 
         uvgrid1 = make_grid_hermitian uvgrid
 
