@@ -24,8 +24,8 @@ import qualified Data.List as L (sort,(!!),sortBy)
 import Data.Time.Clock
 
 --aw_gridding :: String -> String -> String -> IO Image
-aw_gridding :: Runners (String -> String -> String -> Maybe Int -> IO (Scalar F))
-aw_gridding run runN wfile afile datfile n = do
+aw_gridding :: Runners (String -> String -> String -> Maybe Int -> Maybe String -> IO (Scalar F))
+aw_gridding run runN wfile afile datfile n outfile = do
     --setFlag dump_phases
     let theta    = 0.008
         lam      = 300000
@@ -64,8 +64,9 @@ aw_gridding run runN wfile afile datfile n = do
         img = run . map real . ifft $ uvgrid1
         max = run . maximum . flatten . use $ img
     P.putStrLn "Start imaging"
-    createh5File "result.h5"
-    createDatasetDouble "result.h5" "/img" img
+    case outfile of
+        Nothing -> return ()
+        Just fn -> do createh5File fn; createDatasetDouble fn "/img" img
     --return maxrun
     return $ max
 
