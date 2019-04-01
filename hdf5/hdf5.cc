@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <cstdlib>
 
 #include "hdf5.h"
 #include "hdf5_hl.h"
