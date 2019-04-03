@@ -281,9 +281,23 @@ convgrid3 run runN wkerns akerns a p index v =
                    | otherwise = processer (index0 i) (dat0 i) wkerns' akerns'-}
         processi i = processer (index0 i) (dat0 i) wkerns' akerns'
 
+
+        index03 = compute index
+        dat03   = compute dat
+        wkerns03 = compute wkerns
+        akerns03 = compute akerns
+        processer2 :: Exp Int -> Acc (Matrix Visibility) -> Acc (Matrix Visibility)
+        processer2 n aa = 
+            let id = unit $ index03 !! n
+                dat = unit $ dat03 !! n
+            in processOne id dat wkerns03 akerns03 aa
+
+        result2 :: Acc (Matrix Visibility)
+        result2 = afor n processer2 (compute a)
+
         result = myfor n' processi a'
         
-    in (use result)
+    in compute result2
 
 processOne :: Acc (Scalar (Int, Int, Int)) -> Acc (Scalar(Int, Int, Int, Int, Visibility)) -> Acc (Array DIM5 Visibility) -> Acc (Array DIM3 Visibility) -> Acc (Matrix Visibility) -> Acc (Matrix Visibility) 
 processOne
@@ -324,8 +338,6 @@ processOne
                     lift ( x + j
                          , y + i
                          , vis * awkern ! lift (Z :. i :. j) )
-
-
         in permute (+) a indexer val
 
 -- Imaging with a w kernel TODO: It differs from the normal implementation atm, it will only work with w-kernels, not aw-kernels
@@ -746,6 +758,21 @@ myfor n f x | n P.== 0    = x
 
 liftTupf :: (Elt a, Elt b) => (Exp a -> Exp a) -> (Exp b -> Exp b) -> Exp (a,b) -> Exp (a,b)
 liftTupf f g (unlift -> (a, b)) = lift (f a, g b)
+
+afor :: forall a. Arrays a => Exp Int -> (Exp Int -> Acc a -> Acc a) -> Acc a -> Acc a
+afor n f m = let
+    newf :: Acc (Scalar Int, a) -> Acc (Scalar Int, a)
+    newf (unlift -> (i, m) :: (Acc (Scalar Int), Acc a)) = 
+        let i' = map (+1) i 
+        in lift (i', compute $ f (the i') m)
+
+    condition :: Acc (Scalar Int, a) -> Acc (Scalar Bool)
+    condition (unlift -> (i, m) :: (Acc (Scalar Int), Acc a)) = map (<n) i
+
+    initial :: Acc (Scalar Int, a)
+    initial = lift (unit 0, m)
+    in asnd $ awhile condition newf initial
+
 
 --Maybe backpermute could be used aswel, but we need source values
 padder :: Elt a => Acc (Matrix a) -> Exp (Int, Int) -> Exp (Int, Int) -> Exp a ->  Acc (Matrix a)
