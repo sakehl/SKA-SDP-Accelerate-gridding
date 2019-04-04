@@ -243,7 +243,7 @@ convgrid2 gcf a p wbin v =
                  , vis * gcf ! lift (Z :. wbin :. yf :. xf :. i :. j) )
     in permute (+) a indexer val
 
-convgrid3 :: Runners (
+convgrid3 ::
              Acc (Array DIM5 Visibility)        -- The oversampled convolution w-kernel
           -> Acc (Array DIM3 Visibility)        -- The a-kernels
           -> Acc (Matrix Visibility)            -- Destination grid N x N of complex numbers
@@ -251,8 +251,7 @@ convgrid3 :: Runners (
           -> Acc (Vector (Int, Int, Int))       -- *DIF* The wbin index of the convolution kernel and the index of the a-kernels
           -> Acc (Vector Visibility)            -- The visiblities
           -> Acc (Matrix Visibility)
-        )
-convgrid3 run runN wkerns akerns a p index v =
+convgrid3 wkerns akerns a p index v =
     let Z :. _ :. qpx :. _ :. gh :. gw = unlift (shape wkerns) :: Z :. Exp Int :. Exp Int :. Exp Int :. Exp Int :. Exp Int
         Z :. height :. width = unlift (shape a) :: Z :. Exp Int :. Exp Int
         Z :. n = unlift (shape v) :: Z :. Exp Int
@@ -265,6 +264,7 @@ convgrid3 run runN wkerns akerns a p index v =
         dat = zip5 cx cxf cy cyf v
 
         -- We reuse this one a lot, so compile it
+        {-
         processer = runN processOne
         index02 = runN (\i -> unit $ index !! the i)
         dat02   = runN (\i -> unit $ dat   !! the i)
@@ -281,11 +281,13 @@ convgrid3 run runN wkerns akerns a p index v =
                    | otherwise = processer (index0 i) (dat0 i) wkerns' akerns'-}
         processi i = processer (index0 i) (dat0 i) wkerns' akerns'
 
+        result = myfor n' processi a'
+        -}
 
-        index03 = compute index
-        dat03   = compute dat
-        wkerns03 = compute wkerns
-        akerns03 = compute akerns
+        index03 = index
+        dat03   = dat
+        wkerns03 = wkerns
+        akerns03 = akerns
         processer2 :: Exp Int -> Acc (Matrix Visibility) -> Acc (Matrix Visibility)
         processer2 n aa = 
             let id = unit $ index03 !! n
@@ -293,11 +295,11 @@ convgrid3 run runN wkerns akerns a p index v =
             in processOne id dat wkerns03 akerns03 aa
 
         result2 :: Acc (Matrix Visibility)
-        result2 = afor n processer2 (compute a)
+        result2 = afor n processer2 (a)
 
-        result = myfor n' processi a'
         
-    in compute result2
+        
+    in result2
 
 processOne :: Acc (Scalar (Int, Int, Int)) -> Acc (Scalar(Int, Int, Int, Int, Visibility)) -> Acc (Array DIM5 Visibility) -> Acc (Array DIM3 Visibility) -> Acc (Matrix Visibility) -> Acc (Matrix Visibility) 
 processOne
@@ -394,15 +396,19 @@ w_cache_imaging kernops@KernelOptions{wstep = wstep'}
     in convgrid2 (use thekernels) guv p wbins vis
 
 -- Imaging with aw-caches
-aw_imaging :: Runners (KernelOptions -> OtherImagingArgs -> ImagingFunction)
-aw_imaging run runN kernops@KernelOptions{wstep = wstep', qpx = qpx'}
+aw_imaging :: KernelOptions -> OtherImagingArgs -> F -> Int
+                -> Acc WKernels
+                -> Acc (Vector F)
+                -> Acc AKernels
+                -> Acc (Vector BaseLines)                           -- (uvw) all the uvw baselines (coordinates) (lenght : n * (n-1))
+                -> Acc (Vector (Antenna, Antenna, Time, Frequency)) -- (src) (Antenna 1, Antenna 2, The time (in MJD UTC), Frequency (Hz)) (lenght : n * (n-1))
+                -> Acc (Vector Visibility)                          -- (vis) visibility  (length n * (n-1))
+                -> Acc (Matrix Visibility)
+aw_imaging kernops@KernelOptions{wstep = wstep', qpx = qpx'}
   otargs@OtherImagingArgs{akernels = akernels'
-                         ,wkernels = wkernels'}
-  theta lam uvw src vis =
+                         ,wkernels = wkernels'} theta lam 
+        wkernels wbins akernels uvw src vis =
     let
-        akernels = fromJust akernels'
-        (wkernels, wbins) = fromJust wkernels'
-
         lamf = fromIntegral lam
         n = constant . P.round $ theta * lamf
 
@@ -412,11 +418,11 @@ aw_imaging run runN kernops@KernelOptions{wstep = wstep', qpx = qpx'}
 
         -- We just make them all here, that's easiest for now
         (_,_,w) = unzip3 uvw
-        closestw = map (findClosest (use wbins)) w
+        closestw = map (findClosest wbins) w
         (a1, a2, _, _) = unzip4 src
         index = zipWith3 (\x y z -> lift (x, A.fromIntegral y, A.fromIntegral z)) closestw a1 a2
         --Normally we conjugate the kernel here, but we do it later on in the convgrid3 (or processOne) function somewhere
-    in convgrid3 run runN (use wkernels) (use akernels) guv p index vis
+    in convgrid3 wkernels akernels guv p index vis
     
 ----------------------------------
 -- Processing the imaging functions
@@ -764,7 +770,7 @@ afor n f m = let
     newf :: Acc (Scalar Int, a) -> Acc (Scalar Int, a)
     newf (unlift -> (i, m) :: (Acc (Scalar Int), Acc a)) = 
         let i' = map (+1) i 
-        in lift (i', compute $ f (the i') m)
+        in lift (i', f (the i) m)
 
     condition :: Acc (Scalar Int, a) -> Acc (Scalar Bool)
     condition (unlift -> (i, m) :: (Acc (Scalar Int), Acc a)) = map (<n) i

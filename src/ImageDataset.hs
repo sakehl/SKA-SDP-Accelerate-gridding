@@ -1,6 +1,7 @@
 {-# language TypeOperators       #-}
 {-# language ViewPatterns        #-}
 {-# language ScopedTypeVariables #-}
+{-# LANGUAGE TemplateHaskell #-}
 module ImageDataset where
 
 import Types
@@ -37,7 +38,10 @@ aw_gridding run runN wfile afile datfile n outfile = do
     let t = linearIndexArray ts 0
     akerns <- getAKernels afile theta t f
     wkerns <- getWKernels wfile theta
-    let oargs = noOtherArgs{akernels = Just akerns, wkernels = Just wkerns}
+    let oargs = noOtherArgs
+        akernels = use akerns
+        wkernels = use (P.fst wkerns)
+        wbins    = use (P.snd wkerns)
         args = noArgs
         len = constant . maybe (arraySize vis) P.id $ n
         len_ = lift (Z :. len) :: Exp DIM1
@@ -57,8 +61,14 @@ aw_gridding run runN wfile afile datfile n outfile = do
         myuvw = uvw1
         mysrc = src0
         myvis = vis1
-        uvgrid = aw_imaging run runN args oargs theta lam myuvw mysrc (zipWith (*) myvis wt)
-
+        
+        {-
+        uvgridf = $(CPU.runQ (aw_imaging noArgs noOtherArgs 0.008 300000))
+        --uvgridf = runN (aw_imaging noArgs noOtherArgs 0.008 300000)
+        uvgrid = uvgridf (CPU.run wkernels) (CPU.run wbins) (CPU.run akernels) (CPU.run myuvw) (CPU.run mysrc) (CPU.run $ zipWith (*) myvis wt)
+        uvgrid1 = make_grid_hermitian (use uvgrid)
+        -}
+        uvgrid  = aw_imaging noArgs noOtherArgs 0.008 300000 wkernels wbins akernels myuvw mysrc (zipWith (*) myvis wt)
         uvgrid1 = make_grid_hermitian uvgrid
 
         img = run . map real . ifft $ uvgrid1

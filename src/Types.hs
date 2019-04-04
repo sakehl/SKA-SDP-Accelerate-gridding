@@ -22,3 +22,7 @@ type Kernel = Array DIM4 Visibility
 type WKernel = Array DIM4 Visibility
 type AKernel = Array DIM2 Visibility
 type AWKernel = Array DIM2 Visibility
+
+type WKernels = Array DIM5 Visibility
+type AKernels = Array DIM3 Visibility
+type AWKernels = Array DIM3 Visibility
