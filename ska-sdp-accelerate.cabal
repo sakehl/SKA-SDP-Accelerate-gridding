@@ -61,7 +61,7 @@ library
     , time
     , vector
   if flag(llvm-gpu)
-    cpp-options: -DACCELERATE_LLVM_NATIVE_BACKEND
+    cpp-options: -DACCELERATE_LLVM_PTX_BACKEND
     build-depends:
       accelerate-llvm-ptx
   default-language: Haskell2010
@@ -85,7 +85,7 @@ executable ska-sdp-accelerate-exe
     , time
     , vector
   if flag(llvm-gpu)
-    cpp-options: -DACCELERATE_LLVM_NATIVE_BACKEND
+    cpp-options: -DACCELERATE_LLVM_PTX_BACKEND
     build-depends:
       accelerate-llvm-ptx
   default-language: Haskell2010
