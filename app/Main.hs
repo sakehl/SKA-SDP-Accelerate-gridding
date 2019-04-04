@@ -42,8 +42,9 @@ main = do
         Inter -> aw_gridding I.run I.runN wkern akern visdata n_ outFile
 #ifdef ACCELERATE_LLVM_PTX_BACKEND
         GPU -> aw_gridding GPU.run GPU.runN wkern akern visdata n_ outFile
+#else
+        GPU -> error "GPU implementation not supported, build with flag \"llvm-gpu\""
 #endif
-        _ -> aw_gridding CPU.run CPU.runN wkern akern visdata n_ outFile
     putStrLn (show fourier)
 
 
