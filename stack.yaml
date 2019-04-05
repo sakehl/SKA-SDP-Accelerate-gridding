@@ -2,7 +2,8 @@
 # https://docs.haskellstack.org/en/stable/yaml_configuration/
 
 # Resolver to choose a specific stackage snapshot or a compiler version
-resolver: lts-13.5
+resolver: lts-9.0
+allow-newer: true
 
 # User packages to be built
 packages:
@@ -10,26 +11,39 @@ packages:
 
 # Dependency packages to be pulled from upstream that are not in the resolver
 extra-deps:
-- git:    https://github.com/tmcdonell/accelerate.git
-  commit: d948d737683bc2f340b56319a4412505274502fc
+- git:    https://github.com/AccelerateHS/accelerate.git
+  commit: 36f86c5e9ed6cd393b69b7c2c295c88d852935c8
+#  commit: d948d737683bc2f340b56319a4412505274502fc
 
-- git:    https://github.com/tmcdonell/accelerate-llvm.git
-  commit: a7a5c89a35f766dd14f6f2a982ea165bed0fcac1
+#
+
+- git:    https://github.com/AccelerateHS/accelerate-llvm.git
+  commit: 56fb32ab6b17bfa724c33a1eee596f573c6ba495
+#- git:    https://github.com/tmcdonell/accelerate-llvm.git
+#  commit: 4a6c35ae4382d8e5de8b74e36a988e5437c5c01a
+#commit: a7a5c89a35f766dd14f6f2a982ea165bed0fcac1
   subdirs:
     - accelerate-llvm
     - accelerate-llvm-native
     - accelerate-llvm-ptx
 
-- git:    https://github.com/tmcdonell/accelerate-fft.git
-  commit: 782a873c000a89fd521e1ce4107daaf14bdc819d
+#- git:    https://github.com/tmcdonell/accelerate-fft.git
+#  commit: 782a873c000a89fd521e1ce4107daaf14bdc819d
 
-- git:    https://github.com/tmcdonell/lens-accelerate.git
-  commit: b74eb8098735b1ad6cff3c5655af03d3f29b9f8e
+#- git:    https://github.com/tmcdonell/lens-accelerate.git
+#  commit: b74eb8098735b1ad6cff3c5655af03d3f29b9f8e
 
-- git: https://github.com/AccelerateHS/accelerate-io.git  
-  commit: 15c67bf66bf44bc0d6567b0d6f41338bffa178c8
+#- git: https://github.com/AccelerateHS/accelerate-io.git  
+#  commit: 15c67bf66bf44bc0d6567b0d6f41338bffa178c8
 
-- llvm-hs-7.0.1
+- lens-accelerate-0.2.0.0
+- accelerate-io-1.0.0.1
+- accelerate-fft-1.1.0.0
+
+- llvm-hs-4.0.0.0
+
+- llvm-hs-pure-4.0.0.0
+- repa-3.4.1.4
 
 - vector-0.12.0.1
 
@@ -39,7 +53,7 @@ flags:
     debug: true
   accelerate-fft:
     llvm-ptx: false
-    llvm-cpu: true
+    llvm-cpu: false
 #  accelerate-llvm-native:
 #    unsafe-checks: true
 #    internal-checks: true

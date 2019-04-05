@@ -17,9 +17,8 @@ import System.Directory
 import Control.Monad
 
 import qualified Data.Vector.Storable as SV
-import qualified Data.Array.Accelerate.IO.Data.Vector.Storable as A
+import qualified Data.Array.Accelerate.IO                      as A
 import qualified Data.Array.Accelerate                         as A
-import qualified Data.Array.Accelerate.IO.Foreign.ForeignPtr   as A
 import qualified Data.Array.Accelerate.Array.Sugar             as A hiding(shape)
 import Data.Array.Accelerate.Data.Complex
 
@@ -58,10 +57,10 @@ foreign import ccall unsafe "createDatasetInt"
     c_createDatasetInt64 :: CString -> CString -> CInt -> Ptr CInt -> Ptr CLong -> IO ()
 
 foreign import ccall unsafe "createDatasetDouble"
-    c_createDatasetDouble :: CString -> CString -> CInt -> Ptr CInt -> Ptr CDouble -> IO ()
+    c_createDatasetDouble :: CString -> CString -> CInt -> Ptr CInt -> Ptr Double -> IO ()
 
 foreign import ccall unsafe "createDatasetComplex"
-    c_createDatasetComplex :: CString -> CString -> CInt -> Ptr CInt -> Ptr ComplexCDouble -> IO ()
+    c_createDatasetComplex :: CString -> CString -> CInt -> Ptr CInt -> Ptr ComplexDouble -> IO ()
 
 foreign import ccall unsafe "listGroupMembers"
     c_listGroupMembers :: CString -> CString -> IO (Ptr CString)
@@ -71,9 +70,9 @@ createh5File name' = do
     name <- newCString name'
     c_createh5File name
 
-createDatasetDoubleV :: String -> String -> CInt -> SV.Vector CInt -> SV.Vector CDouble -> IO ()
+createDatasetDoubleV :: String -> String -> CInt -> SV.Vector CInt -> SV.Vector Double -> IO ()
 createDatasetDoubleV = createDatasetV c_createDatasetDouble
-createDatasetComplexV :: String -> String -> CInt -> SV.Vector CInt -> SV.Vector ComplexCDouble -> IO ()
+createDatasetComplexV :: String -> String -> CInt -> SV.Vector CInt -> SV.Vector ComplexDouble -> IO ()
 createDatasetComplexV = createDatasetV c_createDatasetComplex
 
 createDatasetV :: Storable a => (CString -> CString -> CInt -> Ptr CInt -> Ptr a -> IO ()) -> 
@@ -109,7 +108,7 @@ listGroupMembers name' group' = do
     listp <- c_listGroupMembers name group
     cstringp <- peekArray0 nullPtr listp
     mapM peekCString cstringp
-
+{-
 readDataset :: forall e a b sh.(Storable b, A.EltRepr b ~ e, A.Elt b, A.ForeignPtrs e ~ ForeignPtr a, A.Shape sh) =>
              (CString -> CString -> Ptr b -> IO ())
             -> String -> String -> IO (A.Array sh b)
@@ -190,17 +189,32 @@ readDatasetsComplex :: (A.Shape sh) => String -> [String] -> IO (A.Array sh Comp
 readDatasetsComplex n ds = do
     m <- readDatasets c_readDatasetsComplex n ds
     return $ unsafeCastDataSet m
+    -}
+
+readDatasetComplex :: (A.Shape sh) => String -> String -> IO (A.Array sh ComplexDouble)
+readDatasetComplex n1 n2 = undefined
+
+readDatasetInt64 :: (A.Shape sh) => String -> String -> IO (A.Array sh Int64)
+readDatasetInt64 n1 n2 = undefined
+
+readDatasetDouble :: (A.Shape sh) => String -> String -> IO (A.Array sh Double)
+readDatasetDouble n1 n2 = undefined
+
+readDatasetsComplex :: (A.Shape sh) => String -> [String] -> IO (A.Array sh ComplexDouble)
+readDatasetsComplex n ds = undefined
 
 createDatasetDouble :: (A.Shape sh) => String -> String -> A.Array sh Double -> IO ()
 createDatasetDouble name dataset dat= do
     let dims = SV.map fromIntegral . SV.fromList . reverse . A.shapeToList . A.arrayShape $ dat
     let rank = fromIntegral . SV.length $ dims
-    let vec = SV.unsafeCast . A.toVectors $ dat
+    let vec = A.toVectors $ dat
     createDatasetDoubleV name dataset rank dims vec
 
+{-
 createDatasetComplex :: (A.Shape sh) => String -> String -> A.Array sh ComplexDouble -> IO ()
 createDatasetComplex name dataset dat = do
     let dims = SV.map fromIntegral . SV.fromList . reverse . A.shapeToList . A.arrayShape $ dat :: SV.Vector CInt
     let rank = fromIntegral . SV.length $ dims
-    let vec = SV.unsafeCast . A.toVectors $ dat
+    let vec = A.toVectors $ dat
     createDatasetComplexV name dataset rank dims vec
+-}

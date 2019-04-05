@@ -38,10 +38,10 @@ main = do
         Nothing -> return ()
         Just fn  -> remover fn
     fourier <- case backend of
-        CPU -> aw_gridding CPU.run CPU.runN wkern akern visdata n_ outFile
-        Inter -> aw_gridding I.run I.runN wkern akern visdata n_ outFile
+        CPU -> aw_gridding CPU.run wkern akern visdata n_ outFile
+        Inter -> aw_gridding I.run wkern akern visdata n_ outFile
 #ifdef ACCELERATE_LLVM_PTX_BACKEND
-        GPU -> aw_gridding GPU.run GPU.runN wkern akern visdata n_ outFile
+        GPU -> aw_gridding GPU.run wkern akern visdata n_ outFile
 #else
         GPU -> error "GPU implementation not supported, build with flag \"llvm-gpu\""
 #endif

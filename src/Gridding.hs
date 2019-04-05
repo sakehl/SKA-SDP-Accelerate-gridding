@@ -3,7 +3,6 @@
 {-# language ScopedTypeVariables #-}
 {-# language TypeOperators       #-}
 {-# language ViewPatterns        #-}
-{-# LANGUAGE Rank2Types #-}
 
 module Gridding where
 
@@ -12,8 +11,8 @@ import Types
 import Data.Array.Accelerate                              as A hiding (fromInteger, fromRational, fromIntegral)
 import qualified Data.Array.Accelerate                    as A (fromInteger, fromRational, fromIntegral)
 import Data.Array.Accelerate.Data.Complex                 as A
-import Data.Array.Accelerate.Math.DFT.Centre              as A
-import Data.Array.Accelerate.Math.FFT                     as A
+import Data.Array.Accelerate.Math.DFT.Centre              as A hiding (shift2D)
+import Data.Array.Accelerate.Math.FFT                     as A 
 
 import Data.Array.Accelerate.LLVM.Native                  as CPU
 import Data.Array.Accelerate.Interpreter                  as I
@@ -25,7 +24,6 @@ import Control.Lens as L (_1, _2, _3, _4, _5)
 import Data.Maybe (fromJust, fromMaybe)
 
 import Debug.Trace
-type Runners b = (forall a . Arrays a => Acc a -> a) -> (forall f . Afunction f => f -> AfunctionR f) -> b
 
 data KernelOptions = KernelOptions 
     { patHorShift :: Maybe Int
@@ -341,7 +339,7 @@ processOne
                          , y + i
                          , vis * awkern ! lift (Z :. i :. j) )
         in permute (+) a indexer val
-
+{-
 -- Imaging with a w kernel TODO: It differs from the normal implementation atm, it will only work with w-kernels, not aw-kernels
 w_cache_imaging :: KernelOptions -> OtherImagingArgs -> ImagingFunction
 w_cache_imaging kernops@KernelOptions{wstep = wstep'}
@@ -394,6 +392,7 @@ w_cache_imaging kernops@KernelOptions{wstep = wstep'}
 
         thekernels = CPU.runN $ compute $ myfor (cpusteps - 1) (\i old -> concatOn _5 (makeWKernel i) old) (makeWKernel (cpusteps - 1))
     in convgrid2 (use thekernels) guv p wbins vis
+-}
 
 -- Imaging with aw-caches
 aw_imaging :: KernelOptions -> OtherImagingArgs -> F -> Int
@@ -515,7 +514,7 @@ make_grid_hermitian guv = let
 
         -- Make mirror image, then add its conjugate to the original grid.
         -- We mirror on the zero point, which is off-center if the grid has even size
-        oddReshape = (reverseOn _2 . reverseOn _1) guv
+        oddReshape = (reverse2 . reverse1) guv
         evenReshape = backpermute sh indexer guv
 
         oddConj = map conjugate oddReshape
@@ -621,7 +620,7 @@ extract_mid a n =
         cy = y `div` 2
         s  = n `div` 2
         --o  = if odd n then 1 else 0
-        res = slitOn _1 (cx -s) n . slitOn _2 (cy -s) n $ a
+        res = slit (cx -s) n . slit2 (cy -s) n $ a
         --r1 = dropOn _1 (cx -s) . takeOn _1 (cx + s + o) $ a
         --res = dropOn _2 (cy -s) . takeOn _2 (cy + s + o) $ r1
     in res  
@@ -704,10 +703,10 @@ convolve2dO a1 a2 =
         n = 2 ^ pw :: Exp Int
         n2 = A.fromIntegral $ n * n
 
-        a1fft = fft2D Inverse . ishift2D $ pad_mid a1 n
-        a2fft = fft2D Inverse . ishift2D $ pad_mid a2 n
+        a1fft = myfft2D Inverse . ishift2D $ pad_mid a1 n
+        a2fft = myfft2D Inverse . ishift2D $ pad_mid a2 n
         a1a2 = zipWith (*) a1fft a2fft
-        convolved = shift2D . fft2D Forward $ a1a2
+        convolved = shift2D . myfft2D Forward $ a1a2
         mid = extract_mid convolved n_
     in map (*n2) mid
 
@@ -723,31 +722,31 @@ convolve2d a1 a2 =
         m2 = A.fromIntegral $ m * m
         
 
-        a1fft = fft2D Inverse . ishift2D $ pad_mid a1 m
-        a2fft = fft2D Inverse . ishift2D $ pad_mid a2 m
+        a1fft = myfft2D Inverse . ishift2D $ pad_mid a1 m
+        a2fft = myfft2D Inverse . ishift2D $ pad_mid a2 m
         a1a2 = zipWith (*) a1fft a2fft
-        convolved = shift2D . fft2D Forward $ a1a2
+        convolved = shift2D . myfft2D Forward $ a1a2
         mid = extract_mid convolved n
     in map (*m2) mid
 
 ----------------------
 -- Fourier transformations
 fftO :: Acc (Matrix Visibility) -> Acc (Matrix Visibility)
-fftO = shift2D . fft2D Forward . ishift2D
+fftO = shift2D . myfft2D Forward . ishift2D
 
 ifftO :: Acc (Matrix Visibility) -> Acc (Matrix Visibility)
-ifftO = shift2D . fft2D Inverse . ishift2D
+ifftO = shift2D . myfft2D Inverse . ishift2D
 
 fft :: Acc (Matrix Visibility) -> Acc (Matrix Visibility)
-fft m = (`extract_mid` n_) . shift2D . fft2D Forward . ishift2D . (`pad_mid` n) $ m
+fft m = (`extract_mid` n_) . shift2D . myfft2D Forward . ishift2D . (`pad_mid` n) $ m
     where
         (Z :. n_ :. _) = (unlift . shape) m :: Z :. Exp Int :. Exp Int
         pw = A.ceiling (logBase 2 (A.fromIntegral n_) :: Exp F) :: Exp Int
         n = 2 ^ pw :: Exp Int
 
 ifft :: Acc (Matrix Visibility) -> Acc (Matrix Visibility)
-ifft m = shift2D . fft2D Inverse . ishift2D $ m
---ifft m = (`extract_mid` n_) . shift2D . fft2D Inverse . ishift2D . (`pad_mid` n) $ m
+ifft m = shift2D . myfft2D Inverse . ishift2D $ m
+--ifft m = (`extract_mid` n_) . shift2D . myfft2D Inverse . ishift2D . (`pad_mid` n) $ m
     where
         (Z :. n_ :. _) = (unlift . shape) m :: Z :. Exp Int :. Exp Int
         pw = A.ceiling (logBase 2 (A.fromIntegral n_) :: Exp F) :: Exp Int
@@ -843,3 +842,117 @@ processOne2 wkerns akerns
             -- Let the visibility have the same dimensions as the aw-kernel
             allvis = replicate ( lift ( Z :. gh :. gw)) (unit vis)
         in zipWith (*) allvis awkern
+
+-- || FFT shifts and stuff
+-- | Apply the shifting transform to a vector
+--  
+shift1D :: Elt e => Acc (Vector e) -> Acc (Vector e)
+shift1D arr = backpermute sh p arr  
+      where
+        sh      = shape arr
+        n       = indexHead sh
+        --
+        shift   = (n `quot` 2) + boolToInt (A.odd n)
+        roll i  = (i+shift) `rem` n
+        p       = ilift1 roll
+
+-- | The inverse of the shift1D function, such that 
+-- > ishift1D (shift1D v) = ishift1D (shift1D v) = v
+-- for all vectors
+--          
+ishift1D :: Elt e => Acc (Vector e) -> Acc (Vector e)
+ishift1D arr = backpermute sh p arr  
+      where
+        sh      = shape arr
+        n       = indexHead sh
+        --
+        shift   = (n `quot` 2)-- + boolToInt (A.odd n)
+        roll i  = (i+shift) `rem` n
+        p       = ilift1 roll
+
+-- | Apply the shifting transform to a 2D array
+--
+shift2D :: Elt e => Acc (Array DIM2 e) -> Acc (Array DIM2 e)
+shift2D arr
+  = backpermute sh p arr
+  where
+    sh      = shape arr
+    Z :. h :. w = unlift sh
+    --
+    shifth = (h `quot` 2) + boolToInt (A.odd h)
+    shiftw = (w `quot` 2) + boolToInt (A.odd w)
+
+    p ix
+      = let Z:.y:.x = unlift ix :: Z :. Exp Int :. Exp Int
+        in index2 ((y + shifth) `rem` h)
+                  ((x + shiftw) `rem` w)
+
+-- | The inverse of the shift2D function
+--
+ishift2D :: Elt e => Acc (Array DIM2 e) -> Acc (Array DIM2 e)
+ishift2D arr
+  = backpermute sh p arr
+  where
+    sh      = shape arr
+    Z :. h :. w = unlift sh
+    --
+    shifth = (h `quot` 2)
+    shiftw = (w `quot` 2)
+
+    p ix
+      = let Z:.y:.x = unlift ix :: Z :. Exp Int :. Exp Int
+        in index2 ((y + shifth) `rem` h)
+                  ((x + shiftw) `rem` w)
+
+-- | Apply the shifting transform to a 3D array
+--                  
+shift3D :: Elt e => Acc (Array DIM3 e) -> Acc (Array DIM3 e)
+shift3D arr
+  = backpermute sh p arr
+  where
+    sh      = shape arr
+    Z :. d :. h :. w = unlift sh
+    --
+    shiftd = (d `quot` 2) + boolToInt (A.odd d)
+    shifth = (h `quot` 2) + boolToInt (A.odd h)
+    shiftw = (w `quot` 2) + boolToInt (A.odd w)
+
+    p ix
+      = let Z:.z:.y:.x = unlift ix :: Z :. Exp Int :. Exp Int :. Exp Int
+        in index3 ((z + shiftd) `rem` d)
+                  ((y + shifth) `rem` h)
+                  ((x + shiftw) `rem` w)
+
+-- | The inverse of the shift3D function
+--
+ishift3D :: Elt e => Acc (Array DIM3 e) -> Acc (Array DIM3 e)
+ishift3D arr
+  = backpermute sh p arr
+  where
+    sh      = shape arr
+    Z :. d :. h :. w = unlift sh
+    --
+    shiftd = (d `quot` 2)
+    shifth = (h `quot` 2)
+    shiftw = (w `quot` 2)
+
+    p ix
+      = let Z:.z:.y:.x = unlift ix :: Z :. Exp Int :. Exp Int :. Exp Int
+        in index3 ((z + shiftd) `rem` d)
+                  ((y + shifth) `rem` h)
+                  ((x + shiftw) `rem` w)
+
+myfft2D :: FFTElt e => Mode -> Acc (Array DIM2 (Complex e)) -> Acc (Array DIM2 (Complex e))
+myfft2D mode arr = let
+    sh = P.head . toList . CPU.run . unit$ shape arr
+    in fft2D' mode sh arr
+
+
+slit2 :: Elt e => Exp Int -> Exp Int -> Acc (Matrix e) -> Acc (Matrix e)
+slit2 = undefined
+
+reverse1 :: Elt e => Acc (Matrix e) -> Acc (Matrix e)
+reverse1 = undefined
+
+reverse2 :: Elt e => Acc (Matrix e) -> Acc (Matrix e)
+reverse2 = undefined

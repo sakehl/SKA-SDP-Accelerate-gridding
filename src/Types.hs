@@ -3,6 +3,8 @@ module Types where
 import Data.Array.Accelerate                              as A hiding (fromInteger, fromRational, fromIntegral)
 import Data.Array.Accelerate.Data.Complex                 as A
 
+
+type Matrix a = Array DIM2 a
 --Floating point
 type F = Double
 --Integer

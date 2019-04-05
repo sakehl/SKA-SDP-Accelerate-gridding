@@ -35,7 +35,6 @@ library
       Gridding
       Hdf5
       ImageDataset
-      POSIT
       Types
   other-modules:
       Paths_ska_sdp_accelerate

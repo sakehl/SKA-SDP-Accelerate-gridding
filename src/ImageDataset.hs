@@ -1,7 +1,8 @@
 {-# language TypeOperators       #-}
 {-# language ViewPatterns        #-}
 {-# language ScopedTypeVariables #-}
-{-# LANGUAGE TemplateHaskell #-}
+{-# language TemplateHaskell #-}
+{-# language Rank2Types #-}
 module ImageDataset where
 
 import Types
@@ -19,14 +20,18 @@ import qualified Data.Array.Accelerate.LLVM.Native        as CPU
 import qualified Data.Array.Accelerate.Interpreter        as I
 import Data.Array.Accelerate.Debug                        as A
 
+import Data.Array.Accelerate.Array.Sugar  as S
+
 import qualified Prelude as P
 import Prelude as P (fromIntegral, fromInteger, fromRational, String, return, (>>=), (>>), IO, Maybe(..), maybe)
 import qualified Data.List as L (sort,(!!),sortBy)
 import Data.Time.Clock
 
+type Runners b = (forall a . Arrays a => Acc a -> a) -> b
+
 --aw_gridding :: String -> String -> String -> IO Image
 aw_gridding :: Runners (String -> String -> String -> Maybe Int -> Maybe String -> IO (Scalar F))
-aw_gridding run runN wfile afile datfile n outfile = do
+aw_gridding run wfile afile datfile n outfile = do
     --setFlag dump_phases
     let theta    = 0.008
         lam      = 300000
@@ -35,7 +40,7 @@ aw_gridding run runN wfile afile datfile n outfile = do
     vis <- readVis datfile 
     uvw <- readBaselines datfile
     (a1,a2,ts,f) <- readSource datfile
-    let t = linearIndexArray ts 0
+    let t = P.head . toList $ ts
     akerns <- getAKernels afile theta t f
     wkerns <- getWKernels wfile theta
     let oargs = noOtherArgs
@@ -43,7 +48,7 @@ aw_gridding run runN wfile afile datfile n outfile = do
         wkernels = use (P.fst wkerns)
         wbins    = use (P.snd wkerns)
         args = noArgs
-        len = constant . maybe (arraySize vis) P.id $ n
+        len = constant . maybe (arraySize . arrayShape  $ vis) P.id $ n
         len_ = lift (Z :. len) :: Exp DIM1
         src0 = zip4 (use a1) (use a2) (use ts) (fill len_ (constant f))
         uvwmat = use uvw
@@ -84,7 +89,7 @@ aw_gridding run runN wfile afile datfile n outfile = do
         readVis :: String -> IO (Vector Visibility)
         readVis file = do
             v <- readDatasetComplex file "/vis/vis" :: IO (Array DIM3 Visibility)
-            let size = arraySize v
+            let size = arraySize sh
                 sh   = arrayShape v
                 newv = arrayReshape (Z :. size :: DIM1) v
             return newv
@@ -100,7 +105,7 @@ aw_gridding run runN wfile afile datfile n outfile = do
             a2 <- readDatasetInt64 file "/vis/antenna2" :: IO (Vector Antenna)
             t  <- readDatasetDouble file "/vis/time" :: IO (Vector Time)
             f  <- readDatasetDouble file "/vis/frequency" :: IO (Vector Frequency)
-            let f0 = linearIndexArray f 0
+            let f0 = P.head . toList $ f
             return (a1, a2, t, f0)
         
 getAKernels :: String -> F -> Time -> Frequency -> IO (Array DIM3 Visibility)
@@ -183,3 +188,11 @@ uvw_lambda f uvw = map mapper uvw
         mapper (unlift -> (u,v,w) :: (Exp F, Exp F, Exp F)) = lift (a * u,a *v, a * w)
         -- We divide by the speed of light and multiply with frequency
         a = constant $ f / 299792458.0
+
+
+arrayReshape :: (Shape sh, Shape sh', Elt e) => sh -> Array sh' e -> Array sh e
+arrayReshape = reshape2
+
+reshape2 :: (Shape sh, Shape sh', Elt e) => sh -> Array sh' e -> Array sh e
+reshape2 sh (Array sh' adata)
+  = Array (fromElt sh) adata
