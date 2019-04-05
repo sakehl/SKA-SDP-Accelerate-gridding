@@ -947,12 +947,26 @@ myfft2D mode arr = let
     sh = P.head . toList . CPU.run . unit$ shape arr
     in fft2D' mode sh arr
 
-
-slit2 :: Elt e => Exp Int -> Exp Int -> Acc (Matrix e) -> Acc (Matrix e)
-slit2 = undefined
-
 reverse1 :: Elt e => Acc (Matrix e) -> Acc (Matrix e)
-reverse1 = undefined
+reverse1 xs =
+  let Z :. leny :. lenx = unlift . shape $ xs ::  Z :. Exp Int :. Exp Int
+      pf id = let Z :. y :. x = unlift id :: Z :. Exp Int :. Exp Int
+              in lift (Z :. y :. lenx - x -1)
+  in  backpermute (shape xs) pf xs
 
 reverse2 :: Elt e => Acc (Matrix e) -> Acc (Matrix e)
-reverse2 = undefined
+reverse2 xs =
+  let Z :. leny :. lenx = unlift . shape $ xs ::  Z :. Exp Int :. Exp Int
+      pf id = let Z :. y :. x = unlift id :: Z :. Exp Int :. Exp Int
+              in lift (Z :. leny - y + 1 :. x)
+  in  backpermute (shape xs) pf xs
+
+slit2 :: Elt e => Exp Int -> Exp Int -> Acc (Matrix e) -> Acc (Matrix e)
+slit2 m n acc =
+  let m'        = the (unit m)
+      n'        = the (unit n)
+      Z :. sy :. sx  = unlift (shape acc)            :: Z :. Exp Int :. Exp Int
+      index ix  = let Z :. j :. i = unlift ix        :: Z :. Exp Int :. Exp Int
+                  in  lift (Z :. j + m' :. i)
+  in
+  backpermute (lift (Z :. n' `min` ((sy - m') `max` 0) :. sx ::Z :. Exp Int :. Exp Int)) index acc
