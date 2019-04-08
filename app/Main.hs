@@ -8,6 +8,7 @@ import System.IO.Error hiding (catch)
 import System.Environment
 import qualified Data.Array.Accelerate.LLVM.Native      as CPU
 import qualified Data.Array.Accelerate.Interpreter      as I
+import Data.Array.Accelerate.Debug
 
 #ifdef ACCELERATE_LLVM_PTX_BACKEND
 import qualified Data.Array.Accelerate.LLVM.PTX         as GPU
@@ -16,11 +17,12 @@ import qualified Data.Array.Accelerate.LLVM.PTX         as GPU
 data Args = Args { n   :: Maybe Int
                  , runner :: Run
                  , input :: String
-                 , out :: Maybe String}
+                 , out :: Maybe String
+                 , flags :: [String]}
 
 data Run = GPU | CPU | Inter
 
-defArgs = Args (Just 1) CPU "data" Nothing
+defArgs = Args (Just 1) CPU "data" Nothing []
 
 main :: IO ()
 main = do
@@ -34,6 +36,8 @@ main = do
         akern      = dir ++ "/" ++ "SKA1_Low_akern3.h5"
         visdata    = dir ++ "/" ++ "SKA1_Low_quick.h5"
         outFile    = out parsedArgs
+        fs         = flags parsedArgs
+    mapM_ processFlags fs
     case outFile of
         Nothing -> return ()
         Just fn  -> remover fn
@@ -66,4 +70,24 @@ parser args ("-n":n:xs)   = parser args{n = Just $ read n} xs
 parser args ("-all":xs)   = parser args{n = Nothing} xs
 parser args ("-i":inp:xs) = parser args{input = inp} xs
 parser args ("-o":out:xs) = parser args{out = Just out} xs
+parser args@Args{flags = fs} (('-':'d':f):xs) = parser args{flags=f:fs} xs
 parser args xs            = error $ "Error while parsing" ++ show xs
+
+processFlags :: String -> IO()
+processFlags "verbose" = setFlag verbose
+processFlags "dump_phases" = setFlag dump_phases
+processFlags "dump_sharing" = setFlag dump_sharing
+processFlags "dump_fusion" = setFlag dump_fusion
+processFlags "dump_simpl_stats" = setFlag dump_simpl_stats
+processFlags "dump_simpl_iterations" = setFlag dump_simpl_iterations
+processFlags "dump_vectorisation" = setFlag dump_vectorisation
+processFlags "dump_dot" = setFlag dump_dot
+processFlags "dump_simpl_dot" = setFlag dump_simpl_dot
+processFlags "dump_gc" = setFlag dump_gc
+processFlags "dump_gc_stats" = setFlag dump_gc_stats
+processFlags "dump_cc" = setFlag dump_cc
+processFlags "dump_ld" = setFlag dump_ld
+processFlags "dump_asm" = setFlag dump_asm
+processFlags "dump_exec" = setFlag dump_exec
+processFlags "dump_sched" = setFlag dump_sched
+processFlags xs = putStrLn $ "Warning: Flag \'" ++ xs ++ "\' isn't recognized"
