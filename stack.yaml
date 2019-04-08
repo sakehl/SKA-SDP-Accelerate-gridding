@@ -53,7 +53,7 @@ flags:
     debug: true
   accelerate-fft:
     llvm-ptx: false
-    llvm-cpu: true
+    llvm-cpu: false
 #  accelerate-llvm-native:
 #    unsafe-checks: true
 #    internal-checks: true

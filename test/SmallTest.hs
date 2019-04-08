@@ -44,10 +44,10 @@ wkerns = generate (constant (Z :. 1 :. 1 :. 1 :. 15 :. 15)) f
         f (unlift -> (Z :. n :. yf :. xf :. y :. x) :: Z :. Exp Int :. Exp Int :. Exp Int :. Exp Int :. Exp Int) = A.fromIntegral x * constant (0.01 :+ 0.005) + 0.1
 
 akerns :: Acc (Array DIM3 Visibility)
-akerns = fill (constant (Z :. 3 :. 15 :. 15)) 0.1
+akerns = generate (constant (Z :. 3 :. 15 :. 15)) f
     where
         f :: Exp DIM3 -> Exp Visibility
-        f (unlift -> (Z :. n :. y :. x) :: Z :. Exp Int :. Exp Int :. Exp Int) = A.fromIntegral x * constant (0.01 :+ (-0.005)) + 0.008 + A.fromIntegral n * constant (0 :+ 0.1)
+        f (unlift -> (Z :. n :. y :. x) :: Z :. Exp Int :. Exp Int :. Exp Int) = A.fromIntegral (x+y) * constant (0.01 :+ (-0.005)) + 0.008 + A.fromIntegral n * constant (0 :+ 0.1)
 
 dest :: Acc (Matrix Visibility)
 dest = fill (constant (Z :. 10 :. 10)) 0
@@ -148,3 +148,9 @@ convTest2 =
 
 res2 :: Acc (Scalar F)
 res2 = A.maximum . A.map (\(unlift -> (x,y,v) :: (Exp Int, Exp Int, Exp Visibility)) -> real v) $ convTest2
+
+ffttest :: Acc (Scalar Int) -> Acc (Scalar F)
+ffttest i' = let i = the i'
+    in A.maximum . A.map real . myfft2D Forward . (`pad_mid`32) $ slice akerns (lift (Z :. i :. All :. All))
+
+ffttest2 = collect . elements $ produce 3 ffttest

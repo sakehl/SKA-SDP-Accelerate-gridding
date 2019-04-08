@@ -779,19 +779,21 @@ afor n f m = let
     in asnd $ awhile condition newf initial
 
 
---Maybe backpermute could be used aswel, but we need source values
 padder :: Elt a => Acc (Matrix a) -> Exp (Int, Int) -> Exp (Int, Int) -> Exp a ->  Acc (Matrix a)
 padder array pad_width_x pad_width_y constant_val =
     let
         (x0, x1) = unlift pad_width_x :: (Exp Int, Exp Int)
         (y0, y1) = unlift pad_width_y :: (Exp Int, Exp Int)
         Z :. m :. n = (unlift . shape) array :: ( Z :. Exp Int :. Exp Int)
-        def = fill (index2 (m + y0 + y1) (n + x0 + x1)) constant_val
+        newshape = index2 (m + y0 + y1) (n + x0 + x1)
 
         indexer (unlift -> Z :. y :. x :: Z :. Exp Int :. Exp Int)
-            = index2 (y + y0) (x + x0)
-        result = permute const def indexer array
-    in result
+            = let oldx = x - x0
+                  oldy = y - y0
+                  inrange = oldx >= 0 && oldx < n && oldy >= 0 && oldy < m
+                  oldval  = array ! index2 oldx oldy
+            in if inrange then oldval else constant_val
+    in generate newshape indexer
 
 c0 :: Exp Int
 c0 = constant 0
