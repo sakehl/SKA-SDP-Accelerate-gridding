@@ -64,7 +64,7 @@ vis = use $ fromList (Z :. 2) [0.3 :+ 0.5, 0.4 :+ 0.2]
 convTest :: Acc (Matrix Visibility)
 convTest = convgrid3 wkerns akerns dest uvw index vis
 
-convTest2 :: Acc (Vector (Int, Int, Visibility))-- Acc (Matrix Visibility)--Acc (Vector (Int, Int, Int, Int))
+convTest2 :: Acc (Matrix Visibility)--Acc (Vector (Int, Int, Int, Int))
 convTest2 =
     let Z :. _ :. qpx :. _ :. gh :. gw = unlift (shape wkerns) :: Z :. Exp Int :. Exp Int :. Exp Int :. Exp Int :. Exp Int
         Z :. height :. width = unlift (shape dest) :: Z :. Exp Int :. Exp Int
@@ -89,33 +89,15 @@ convTest2 =
 
         result1 :: Acc (Matrix Visibility)
         result1 = afor n processer2 (dest)
-        
 
         -- The sequences stuff
         (id1, id2, id3) = A.unzip3 index
         visIndex = A.zip6 id1 id2 id3 cxf cyf vis
         
-        visSeq :: Seq [Scalar (Int, Int, Int, Int, Int, Visibility)]
         visSeq = toSeq (constant (Z :. (0::Int))) visIndex
-
-        coordsSeq :: Seq [Scalar (Int, Int)]
         coordsSeq = toSeq (constant (Z :. (0::Int))) $ A.zip cx cyf
-
-        
-        visKernSeq :: Seq [Matrix Visibility]
         visKernSeq = mapSeq (processOne2 wkerns akerns) visSeq
-        {-
-        visKernSeq :: Seq [Matrix Visibility]
-        visKernSeq = mapSeq myProcessor visSeq
-        -}
-        myProcessor :: Acc (Scalar (Int, Int, Int, Int, Int, Visibility)) -> Acc (Matrix Visibility)
-        myProcessor input = let
-            gw = 15 
-            gh = 15
-            (_,_,_,_,_,vis) = unlift . the $ input :: (Exp Int, Exp Int, Exp Int, Exp Int, Exp Int, Exp Visibility)
-            in fill (constant (Z :. gh :. gw)) vis
             
-
         addCoords :: Acc (Matrix Visibility) -> Acc (Scalar (Int, Int)) -> Acc (Matrix (Int, Int, Visibility))
         addCoords vis xy = let
             Z :. gh :. gw = unlift (shape vis) :: Z :. Exp Int :. Exp Int
@@ -131,23 +113,23 @@ convTest2 =
 
         visAndCoordSeq = zipWithSeq addCoords visKernSeq coordsSeq
 
-        res :: Acc (Vector (Int, Int, Visibility))
         res = collect . elements $ visAndCoordSeq
         (xs, ys, resvis) = A.unzip3 res
 
-        indexer id =
-                let y' = ys ! id
-                    x' = xs ! id
-                in index2 y' x'
+        indexer id = let y' = ys ! id
+                         x' = xs ! id
+                     in index2 y' x'
 
         result2 = permute (+) dest indexer resvis
-    in res -- processer2 1 dest --result2
+    in result2 -- processer2 1 dest --result2
 
---res :: Acc (Scalar F)
---res = A.maximum . A.map real $ convTest2
+res :: Acc (Scalar F)
+res = A.maximum . A.map real $ convTest2
 
+{-
 res2 :: Acc (Scalar F)
 res2 = A.maximum . A.map (\(unlift -> (x,y,v) :: (Exp Int, Exp Int, Exp Visibility)) -> real v) $ convTest2
+-}
 
 ffttest :: Acc (Scalar Int) -> Acc (Scalar F)
 ffttest i' = let i = the i'
