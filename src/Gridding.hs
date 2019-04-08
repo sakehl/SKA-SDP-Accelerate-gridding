@@ -824,17 +824,17 @@ findClosest ws w =
     in if abs (w - ws !! r1) < abs (w - ws !! r2) then r1 else r2
 
 
-processOne2 ::  Acc (Array DIM3 Visibility) -> Acc (Array DIM3 Visibility) -> Acc (Scalar (Int, Int, Int, Visibility)) ->  Acc (Matrix Visibility)
+processOne2 ::  Acc (Array DIM5 Visibility) -> Acc (Array DIM3 Visibility) -> Acc (Scalar (Int, Int, Int, Int, Int, Visibility)) ->  Acc (Matrix Visibility)
 processOne2 wkerns akerns 
-    (unlift . the -> (wbin, a1index, a2index, vis) :: (Exp Int, Exp Int, Exp Int, Exp Visibility)) =
-        let Z :. _ :. gh :. gw = unlift (shape wkerns) :: Z :. Exp Int :. Exp Int :. Exp Int
+    (unlift . the -> (wbin, a1index, a2index, xf, yf, vis) :: (Exp Int, Exp Int, Exp Int, Exp Int, Exp Int, Exp Visibility)) =
+        let Z :. _ :. _ :. _ :. gh :. gw = unlift (shape wkerns) :: Z :. Exp Int :. Exp Int :. Exp Int :. Exp Int :. Exp Int
             halfgh = gh `div` 2
             halfgw = gw `div` 2
             
             --Get the right a and w kernels
             a1 = slice akerns (lift (Z :. a1index :. All :. All))
             a2 = slice akerns (lift (Z :. a2index :. All :. All))
-            w  = slice wkerns (lift (Z :. wbin :. All :. All))
+            w  = slice wkerns (lift (Z :. wbin :. yf :. xf :. All :. All))
             --Convolve them
             akern = convolve2d a1 a2
             awkern = convolve2d w akern
@@ -944,7 +944,8 @@ ishift3D arr
 
 myfft2D :: FFTElt e => Mode -> Acc (Array DIM2 (Complex e)) -> Acc (Array DIM2 (Complex e))
 myfft2D mode arr = let
-    sh = P.head . toList . CPU.run . unit$ shape arr
+    --sh = P.head . toList . CPU.run . unit$ shape arr
+    sh = Z :. 32 :. 32
     in fft2D' mode sh arr
 
 reverse1 :: Elt e => Acc (Matrix e) -> Acc (Matrix e)

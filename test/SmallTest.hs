@@ -15,6 +15,7 @@ import Data.Array.Accelerate.Math.FFT                     as A
 
 import Data.Array.Accelerate.LLVM.Native                  as CPU
 import Data.Array.Accelerate.Interpreter                  as I
+import Data.Array.Accelerate.Debug
 
 import Prelude as P
 
@@ -32,18 +33,9 @@ test = let processer = undefined --CPU.runN SmallTest.processOne2
            dat = use $ fromList (Z :. 4) [(x,x,x,x, fromIntegral x) | x <- [0..]] :: Acc (Vector (Int, Int, Int, Int, Visibility))
 
        in (processi 3 P.$! processi 2 P.$! processi 1 P.$! processi 0 a')
--}
+
 processOne2 :: Acc (Scalar (Int, Int, Int)) -> Acc (Scalar(Int, Int, Int, Int, Visibility)) -> Acc (Array DIM5 Visibility) -> Acc (Array DIM3 Visibility) -> Acc (Matrix Visibility) -> Acc (Matrix Visibility) 
 processOne2 _ _ _ _ t = t
-{-
-convgrid3 :: Runners (
-             Acc (Array DIM5 Visibility)        -- The oversampled convolution w-kernel
-          -> Acc (Array DIM3 Visibility)        -- The a-kernels
-          -> Acc (Matrix Visibility)            -- Destination grid N x N of complex numbers
-          -> Acc (Vector BaseLines)             -- The uvw baselines, but between -.5 and .5
-          -> Acc (Vector (Int, Int, Int))       -- *DIF* The wbin index of the convolution kernel and the index of the a-kernels
-          -> Acc (Vector Visibility)            -- The visiblities
-          -> Acc (Matrix Visibility)
 -}
 wkerns :: Acc (Array DIM5 Visibility)
 wkerns = generate (constant (Z :. 1 :. 1 :. 1 :. 15 :. 15)) f
@@ -72,7 +64,7 @@ vis = use $ fromList (Z :. 2) [0.3 :+ 0.5, 0.4 :+ 0.2]
 convTest :: Acc (Matrix Visibility)
 convTest = convgrid3 wkerns akerns dest uvw index vis
 
-convTest2 ::  Acc (Matrix Visibility)--Acc (Vector (Int, Int, Int, Int))
+convTest2 :: Acc (Vector (Int, Int, Visibility))-- Acc (Matrix Visibility)--Acc (Vector (Int, Int, Int, Int))
 convTest2 =
     let Z :. _ :. qpx :. _ :. gh :. gw = unlift (shape wkerns) :: Z :. Exp Int :. Exp Int :. Exp Int :. Exp Int :. Exp Int
         Z :. height :. width = unlift (shape dest) :: Z :. Exp Int :. Exp Int
@@ -95,68 +87,64 @@ convTest2 =
                 dat = unit $ dat03 A.!! n
             in processOne id dat wkerns03 akerns03 aa
 
-        result2 :: Acc (Matrix Visibility)
-        result2 = afor n processer2 (dest)
+        result1 :: Acc (Matrix Visibility)
+        result1 = afor n processer2 (dest)
+        
 
-    in processer2 0 dest --result2
-{-
-convgrid3 :: Runners (
-             Acc (Array DIM5 Visibility)        -- The oversampled convolution w-kernel
-          -> Acc (Array DIM3 Visibility)        -- The a-kernels
-          -> Acc (Matrix Visibility)            -- Destination grid N x N of complex numbers
-          -> Acc (Vector BaseLines)             -- The uvw baselines, but between -.5 and .5
-          -> Acc (Vector (Int, Int, Int))       -- *DIF* The wbin index of the convolution kernel and the index of the a-kernels
-          -> Acc (Vector Visibility)            -- The visiblities
-          -> Acc (Matrix Visibility)
-        )
-convgrid3 run runN wkerns akerns a p index v =
-    let Z :. _ :. qpx :. _ :. gh :. gw = unlift (shape wkerns) :: Z :. Exp Int :. Exp Int :. Exp Int :. Exp Int :. Exp Int
-        Z :. height :. width = unlift (shape a) :: Z :. Exp Int :. Exp Int
-        Z :. n = unlift (shape v) :: Z :. Exp Int
-        halfgh = gh `div` 2
-        halfgw = gw `div` 2
+        -- The sequences stuff
+        (id1, id2, id3) = A.unzip3 index
+        visIndex = A.zip6 id1 id2 id3 cxf cyf vis
+        
+        visSeq :: Seq [Scalar (Int, Int, Int, Int, Int, Visibility)]
+        visSeq = toSeq (constant (Z :. (0::Int))) visIndex
 
-        --Gather the coords, make them into ints and fractions and zip with visibility
-        coords = frac_coords (lift (height, width)) qpx p
-        (cx, cxf, cy, cyf) = unzip4 coords
-        dat = zip5 cx cxf cy cyf v
+        coordsSeq :: Seq [Scalar (Int, Int)]
+        coordsSeq = toSeq (constant (Z :. (0::Int))) $ A.zip cx cyf
 
-        -- We reuse this one a lot, so compile it
+        
+        visKernSeq :: Seq [Matrix Visibility]
+        visKernSeq = mapSeq (processOne2 wkerns akerns) visSeq
         {-
-        processer = runN processOne
-        index02 = runN (\i -> unit $ index !! the i)
-        dat02   = runN (\i -> unit $ dat   !! the i)
-
-        dat0 i = dat02 (fromList Z [i])
-        index0 i = index02 (fromList Z [i])
-        wkerns' = run wkerns
-        akerns' = run akerns
-        a' = run a
-        n' = P.head . toList .run . unit $  n
-        {-
-        processi i | i `P.mod` 1000 P.== 0 = trace (printf "We are processing number %i now (total: %i)" t0) i n') 
-                            $ processer (index0 i) (dat0 i) wkerns' akerns'
-                   | otherwise = processer (index0 i) (dat0 i) wkerns' akerns'-}
-        processi i = processer (index0 i) (dat0 i) wkerns' akerns'
-
-        result = myfor n' processi a'
+        visKernSeq :: Seq [Matrix Visibility]
+        visKernSeq = mapSeq myProcessor visSeq
         -}
+        myProcessor :: Acc (Scalar (Int, Int, Int, Int, Int, Visibility)) -> Acc (Matrix Visibility)
+        myProcessor input = let
+            gw = 15 
+            gh = 15
+            (_,_,_,_,_,vis) = unlift . the $ input :: (Exp Int, Exp Int, Exp Int, Exp Int, Exp Int, Exp Visibility)
+            in fill (constant (Z :. gh :. gw)) vis
+            
 
-        index03 = index
-        dat03   = dat
-        wkerns03 = wkerns
-        akerns03 = akerns
-        processer2 :: Exp Int -> Acc (Matrix Visibility) -> Acc (Matrix Visibility)
-        processer2 n aa = 
-            let id = unit $ index03 !! n
-                dat = unit $ dat03 !! n
-            in processOne id dat wkerns03 akerns03 aa
+        addCoords :: Acc (Matrix Visibility) -> Acc (Scalar (Int, Int)) -> Acc (Matrix (Int, Int, Visibility))
+        addCoords vis xy = let
+            Z :. gh :. gw = unlift (shape vis) :: Z :. Exp Int :. Exp Int
+            (x,y) = unlift . the $ xy :: (Exp Int, Exp Int)
+            halfgw = gw `div` 2
+            halfgh = gh `div` 2
 
-        result2 :: Acc (Matrix Visibility)
-        result2 = afor n processer2 (a)
+            indexmapper :: Exp DIM2 -> Exp Visibility -> Exp (Int, Int, Visibility)
+            indexmapper (unlift . unindex2 -> (i, j)::(Exp Int,Exp Int)) vis =
+                    lift ( x + j - halfgw, y + i - halfgh, vis)
 
-        
-        
-    in result2
+            in imap indexmapper vis
 
--}
+        visAndCoordSeq = zipWithSeq addCoords visKernSeq coordsSeq
+
+        res :: Acc (Vector (Int, Int, Visibility))
+        res = collect . elements $ visAndCoordSeq
+        (xs, ys, resvis) = A.unzip3 res
+
+        indexer id =
+                let y' = ys ! id
+                    x' = xs ! id
+                in index2 y' x'
+
+        result2 = permute (+) dest indexer resvis
+    in res -- processer2 1 dest --result2
+
+--res :: Acc (Scalar F)
+--res = A.maximum . A.map real $ convTest2
+
+res2 :: Acc (Scalar F)
+res2 = A.maximum . A.map (\(unlift -> (x,y,v) :: (Exp Int, Exp Int, Exp Visibility)) -> real v) $ convTest2
