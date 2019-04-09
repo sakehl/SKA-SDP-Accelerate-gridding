@@ -261,43 +261,12 @@ convgrid3 wkerns akerns a p index v =
         (cx, cxf, cy, cyf) = unzip4 coords
         dat = zip5 cx cxf cy cyf v
 
-        -- We reuse this one a lot, so compile it
-        {-
-        processer = runN processOne
-        index02 = runN (\i -> unit $ index !! the i)
-        dat02   = runN (\i -> unit $ dat   !! the i)
-
-        dat0 i = dat02 (fromList Z [i])
-        index0 i = index02 (fromList Z [i])
-        wkerns' = run wkerns
-        akerns' = run akerns
-        a' = run a
-        n' = P.head . toList .run . unit $  n
-        {-
-        processi i | i `P.mod` 1000 P.== 0 = trace (printf "We are processing number %i now (total: %i)" t0) i n') 
-                            $ processer (index0 i) (dat0 i) wkerns' akerns'
-                   | otherwise = processer (index0 i) (dat0 i) wkerns' akerns'-}
-        processi i = processer (index0 i) (dat0 i) wkerns' akerns'
-
-        result = myfor n' processi a'
-        -}
-
-        index03 = index
-        dat03   = dat
-        wkerns03 = wkerns
-        akerns03 = akerns
-        processer2 :: Exp Int -> Acc (Matrix Visibility) -> Acc (Matrix Visibility)
-        processer2 n aa = 
-            let id = unit $ index03 !! n
-                dat = unit $ dat03 !! n
-            in processOne id dat wkerns03 akerns03 aa
-
-        result2 :: Acc (Matrix Visibility)
-        result2 = afor n processer2 (a)
-
-        
-        
-    in result2
+        processer :: Exp Int -> Acc (Matrix Visibility) -> Acc (Matrix Visibility)
+        processer n aa = 
+            let id = unit $ index !! n
+                dat = unit $ dat !! n
+            in processOne id dat wkerns akerns aa
+    in afor n processer a
 
 processOne :: Acc (Scalar (Int, Int, Int)) -> Acc (Scalar(Int, Int, Int, Int, Visibility)) -> Acc (Array DIM5 Visibility) -> Acc (Array DIM3 Visibility) -> Acc (Matrix Visibility) -> Acc (Matrix Visibility) 
 processOne
@@ -339,6 +308,65 @@ processOne
                          , y + i
                          , vis * awkern ! lift (Z :. i :. j) )
         in permute (+) a indexer val
+
+convgridSeq ::
+             Acc (Array DIM5 Visibility)        -- The oversampled convolution w-kernel
+          -> Acc (Array DIM3 Visibility)        -- The a-kernels
+          -> Acc (Matrix Visibility)            -- Destination grid N x N of complex numbers
+          -> Acc (Vector BaseLines)             -- The uvw baselines, but between -.5 and .5
+          -> Acc (Vector (Int, Int, Int))       -- *DIF* The wbin index of the convolution kernel and the index of the a-kernels
+          -> Acc (Vector Visibility)            -- The visiblities
+          -> Acc (Matrix Visibility)
+convgridSeq wkerns akerns a p index v =
+    let Z :. _ :. qpx :. _ :. gh :. gw = unlift (shape wkerns) :: Z :. Exp Int :. Exp Int :. Exp Int :. Exp Int :. Exp Int
+        Z :. height :. width = unlift (shape a) :: Z :. Exp Int :. Exp Int
+        halfgh = gh `div` 2
+        halfgw = gw `div` 2
+
+        --Gather the coords, make them into ints and fractions and zip with visibility
+        coords = frac_coords (lift (height, width)) qpx p
+        (cx, cxf, cy, cyf) = unzip4 coords
+        (wbin, a1, a2) = A.unzip3 index
+        visIndex = A.zip6 wbin a1 a2 cxf cyf v
+        
+        visSeq = toSeq (constant (Z :. (0::Int))) visIndex
+        coordsSeq = toSeq (constant (Z :. (0::Int))) $ A.zip cx cy
+        visKernSeq = mapSeq (compute . processOneSeq wkerns akerns) visSeq
+            
+        addCoords :: Acc (Matrix Visibility) -> Acc (Scalar (Int, Int)) -> Acc (Matrix (Int, Int, Visibility))
+        addCoords vis xy = let
+            (x,y) = unlift . the $ xy :: (Exp Int, Exp Int)
+            indexmapper (unlift . unindex2 -> (i, j)::(Exp Int,Exp Int)) vis =
+                    lift ( x + j - halfgw, y + i - halfgh, vis)
+            in imap indexmapper vis
+
+        visAndCoordSeq = zipWithSeq addCoords visKernSeq coordsSeq
+        res = collect . elements $ visAndCoordSeq
+        (xs, ys, resvis) = A.unzip3 res
+
+        indexer id = let y' = ys ! id
+                         x' = xs ! id
+                     in index2 y' x'
+    in compute $ permute (+) a indexer resvis
+
+processOneSeq ::  Acc (Array DIM5 Visibility) -> Acc (Array DIM3 Visibility) -> Acc (Scalar (Int, Int, Int, Int, Int, Visibility)) ->  Acc (Matrix Visibility)
+processOneSeq wkerns akerns 
+    (unlift . the -> (wbin, a1index, a2index, xf, yf, vis) :: (Exp Int, Exp Int, Exp Int, Exp Int, Exp Int, Exp Visibility)) =
+        let Z :. _ :. _ :. _ :. gh :. gw = unlift (shape wkerns) :: Z :. Exp Int :. Exp Int :. Exp Int :. Exp Int :. Exp Int
+            halfgh = gh `div` 2
+            halfgw = gw `div` 2
+            
+            --Get the right a and w kernels
+            a1 = slice akerns (lift (Z :. a1index :. All :. All))
+            a2 = slice akerns (lift (Z :. a2index :. All :. All))
+            w  = slice wkerns (lift (Z :. wbin :. yf :. xf :. All :. All))
+            --Convolve them
+            akern = convolve2d a1 a2
+            awkern = convolve2d w akern
+
+            -- Let the visibility have the same dimensions as the aw-kernel
+            allvis = replicate ( lift ( Z :. gh :. gw)) (unit vis)
+        in zipWith (*) allvis awkern
 {-
 -- Imaging with a w kernel TODO: It differs from the normal implementation atm, it will only work with w-kernels, not aw-kernels
 w_cache_imaging :: KernelOptions -> OtherImagingArgs -> ImagingFunction
@@ -421,7 +449,7 @@ aw_imaging kernops@KernelOptions{wstep = wstep', qpx = qpx'}
         (a1, a2, _, _) = unzip4 src
         index = zipWith3 (\x y z -> lift (x, A.fromIntegral y, A.fromIntegral z)) closestw a1 a2
         --Normally we conjugate the kernel here, but we do it later on in the convgrid3 (or processOne) function somewhere
-    in convgrid3 wkernels akernels guv p index vis
+    in convgridSeq wkernels akernels guv p index vis
     
 ----------------------------------
 -- Processing the imaging functions
@@ -722,10 +750,10 @@ convolve2d a1 a2 =
         m2 = A.fromIntegral $ m * m
         
 
-        a1fft = myfft2D Inverse . ishift2D $ pad_mid a1 m
-        a2fft = myfft2D Inverse . ishift2D $ pad_mid a2 m
+        a1fft = myfft2D32 Inverse . ishift2D $ pad_mid a1 m
+        a2fft = myfft2D32 Inverse . ishift2D $ pad_mid a2 m
         a1a2 = zipWith (*) a1fft a2fft
-        convolved = shift2D . myfft2D Forward $ a1a2
+        convolved = shift2D . myfft2D32 Forward $ a1a2
         mid = extract_mid convolved n
     in map (*m2) mid
 
@@ -744,13 +772,34 @@ fft m = (`extract_mid` n_) . shift2D . myfft2D Forward . ishift2D . (`pad_mid` n
         pw = A.ceiling (logBase 2 (A.fromIntegral n_) :: Exp F) :: Exp Int
         n = 2 ^ pw :: Exp Int
 
+fftShape :: DIM2 -> Acc (Matrix Visibility) -> Acc (Matrix Visibility)
+fftShape sh = (`extract_mid` oldn) . shift2D . fft2D' Forward newsh . ishift2D . (`pad_mid` padn)
+        where
+            (Z :. n_ :. _) = sh :: Z :. Int :. Int
+            pw = P.ceiling (P.logBase 2 (P.fromIntegral n_) :: F) :: Int
+            n = 2 P.^ pw :: Int
+            newsh = Z :. n :. n
+            oldn = constant n_
+            padn = constant n
+
+
 ifft :: Acc (Matrix Visibility) -> Acc (Matrix Visibility)
-ifft m = shift2D . myfft2D Inverse . ishift2D $ m
---ifft m = (`extract_mid` n_) . shift2D . myfft2D Inverse . ishift2D . (`pad_mid` n) $ m
+--ifft m = shift2D . myfft2D Inverse . ishift2D $ m
+ifft m = (`extract_mid` n_) . shift2D . myfft2D Inverse . ishift2D . (`pad_mid` n) $ m
     where
         (Z :. n_ :. _) = (unlift . shape) m :: Z :. Exp Int :. Exp Int
         pw = A.ceiling (logBase 2 (A.fromIntegral n_) :: Exp F) :: Exp Int
         n = 2 ^ pw :: Exp Int
+
+ifftShape :: DIM2 -> Acc (Matrix Visibility) -> Acc (Matrix Visibility)
+ifftShape sh = (`extract_mid` oldn) . shift2D . fft2D' Inverse newsh . ishift2D . (`pad_mid` padn)
+        where
+            (Z :. n_ :. _) = sh :: Z :. Int :. Int
+            pw = P.ceiling (P.logBase 2 (P.fromIntegral n_) :: F) :: Int
+            n = 2 P.^ pw :: Int
+            newsh = Z :. n :. n
+            oldn = constant n_
+            padn = constant n
 
 ------------------------
 -- Helper functions
@@ -809,8 +858,6 @@ fixoutofbounds maxx maxy defv
         def = lift (defx, defy, defv)
     in if outofbounds then def else old
 
-
-
 findClosest :: (Elt a, Num a, Ord a) => Acc (Vector a) -> Exp a -> Exp Int
 findClosest ws w =
     let cmp (unlift -> (min, max) :: (Exp Int, Exp Int)) = (max - min) `div` 2 >= 1
@@ -824,26 +871,6 @@ findClosest ws w =
         
         (r1, r2) = unlift . while cmp f $ minmax :: (Exp Int, Exp Int)
     in if abs (w - ws !! r1) < abs (w - ws !! r2) then r1 else r2
-
-
-processOne2 ::  Acc (Array DIM5 Visibility) -> Acc (Array DIM3 Visibility) -> Acc (Scalar (Int, Int, Int, Int, Int, Visibility)) ->  Acc (Matrix Visibility)
-processOne2 wkerns akerns 
-    (unlift . the -> (wbin, a1index, a2index, xf, yf, vis) :: (Exp Int, Exp Int, Exp Int, Exp Int, Exp Int, Exp Visibility)) =
-        let Z :. _ :. _ :. _ :. gh :. gw = unlift (shape wkerns) :: Z :. Exp Int :. Exp Int :. Exp Int :. Exp Int :. Exp Int
-            halfgh = gh `div` 2
-            halfgw = gw `div` 2
-            
-            --Get the right a and w kernels
-            a1 = slice akerns (lift (Z :. a1index :. All :. All))
-            a2 = slice akerns (lift (Z :. a2index :. All :. All))
-            w  = slice wkerns (lift (Z :. wbin :. yf :. xf :. All :. All))
-            --Convolve them
-            akern = convolve2d a1 a2
-            awkern = convolve2d w akern
-
-            -- Let the visibility have the same dimensions as the aw-kernel
-            allvis = replicate ( lift ( Z :. gh :. gw)) (unit vis)
-        in zipWith (*) allvis awkern
 
 -- || FFT shifts and stuff
 -- | Apply the shifting transform to a vector
@@ -945,7 +972,10 @@ ishift3D arr
                   ((x + shiftw) `rem` w)
 
 myfft2D :: FFTElt e => Mode -> Acc (Array DIM2 (Complex e)) -> Acc (Array DIM2 (Complex e))
-myfft2D mode arr = let
+myfft2D = undefined
+
+myfft2D32 :: FFTElt e => Mode -> Acc (Array DIM2 (Complex e)) -> Acc (Array DIM2 (Complex e))
+myfft2D32 mode arr = let
     --sh = P.head . toList . CPU.run . unit$ shape arr
     sh = Z :. 32 :. 32
     in fft2D' mode sh arr

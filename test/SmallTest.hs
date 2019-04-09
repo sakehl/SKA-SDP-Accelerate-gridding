@@ -95,8 +95,8 @@ convTest2 =
         visIndex = A.zip6 id1 id2 id3 cxf cyf vis
         
         visSeq = toSeq (constant (Z :. (0::Int))) visIndex
-        coordsSeq = toSeq (constant (Z :. (0::Int))) $ A.zip cx cyf
-        visKernSeq = mapSeq (processOne2 wkerns akerns) visSeq
+        coordsSeq = toSeq (constant (Z :. (0::Int))) $ A.zip cx cy
+        visKernSeq = mapSeq (processOneSeq wkerns akerns) visSeq
             
         addCoords :: Acc (Matrix Visibility) -> Acc (Scalar (Int, Int)) -> Acc (Matrix (Int, Int, Visibility))
         addCoords vis xy = let

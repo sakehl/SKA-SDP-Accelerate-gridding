@@ -34,7 +34,8 @@ aw_gridding :: Runners (String -> String -> String -> Maybe Int -> Maybe String 
 aw_gridding run wfile afile datfile n outfile = do
     --setFlag dump_phases
     let theta    = 0.008
-        lam      = 300000
+        lam      = 300000 :: Int
+        lamf     = fromIntegral lam :: F
     tim <- getCurrentTime
     P.putStrLn $ P.show tim
     vis <- readVis datfile 
@@ -76,7 +77,9 @@ aw_gridding run wfile afile datfile n outfile = do
         uvgrid  = aw_imaging noArgs noOtherArgs 0.008 300000 wkernels wbins akernels myuvw mysrc (zipWith (*) myvis wt)
         uvgrid1 = make_grid_hermitian uvgrid
 
-        img = run . map real . ifft $ uvgrid1
+        gridN = P.round $ theta * lamf
+        gridshape = Z :. gridN :. gridN :: DIM2
+        img = run . map real {-. ifftShape gridshape-} $ uvgrid1
         max = run . maximum . flatten . use $ img
     P.putStrLn "Start imaging"
     case outfile of
