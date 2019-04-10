@@ -25,8 +25,8 @@ import qualified Data.List as L (sort,(!!),sortBy)
 import Data.Time.Clock
 
 --aw_gridding :: String -> String -> String -> IO Image
-aw_gridding :: Runners (String -> String -> String -> Maybe Int -> Maybe String -> IO (Scalar F))
-aw_gridding run runN wfile afile datfile n outfile = do
+aw_gridding :: Runners (String -> String -> String -> Maybe Int -> Maybe String -> Bool-> IO (Scalar F))
+aw_gridding run runN wfile afile datfile n outfile old = do
     --setFlag dump_phases
     let theta    = 0.008
         lam      = 300000
@@ -68,7 +68,8 @@ aw_gridding run runN wfile afile datfile n outfile = do
         uvgrid = uvgridf (CPU.run wkernels) (CPU.run wbins) (CPU.run akernels) (CPU.run myuvw) (CPU.run mysrc) (CPU.run $ zipWith (*) myvis wt)
         uvgrid1 = make_grid_hermitian (use uvgrid)
         -}
-        uvgrid  = aw_imaging noArgs noOtherArgs 0.008 300000 wkernels wbins akernels myuvw mysrc (zipWith (*) myvis wt)
+        uvgrid  = if old then aw_imagingOld noArgs noOtherArgs 0.008 300000 wkernels wbins akernels myuvw mysrc (zipWith (*) myvis wt)
+            else aw_imaging noArgs noOtherArgs 0.008 300000 wkernels wbins akernels myuvw mysrc (zipWith (*) myvis wt)
         uvgrid1 = make_grid_hermitian uvgrid
 
         img = run . map real . ifft $ uvgrid1

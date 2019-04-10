@@ -476,7 +476,34 @@ aw_imaging kernops@KernelOptions{wstep = wstep', qpx = qpx'}
         index = zipWith3 (\x y z -> lift (x, A.fromIntegral y, A.fromIntegral z)) closestw a1 a2
         --Normally we conjugate the kernel here, but we do it later on in the convgrid3 (or processOne) function somewhere
     in convgrid4 wkernels akernels guv p index vis
-    
+
+aw_imagingOld :: KernelOptions -> OtherImagingArgs -> F -> Int
+                -> Acc WKernels
+                -> Acc (Vector F)
+                -> Acc AKernels
+                -> Acc (Vector BaseLines)                           -- (uvw) all the uvw baselines (coordinates) (lenght : n * (n-1))
+                -> Acc (Vector (Antenna, Antenna, Time, Frequency)) -- (src) (Antenna 1, Antenna 2, The time (in MJD UTC), Frequency (Hz)) (lenght : n * (n-1))
+                -> Acc (Vector Visibility)                          -- (vis) visibility  (length n * (n-1))
+                -> Acc (Matrix Visibility)
+aw_imagingOld kernops@KernelOptions{wstep = wstep', qpx = qpx'}
+  otargs@OtherImagingArgs{akernels = akernels'
+                         ,wkernels = wkernels'} theta lam 
+        wkernels wbins akernels uvw src vis =
+    let
+        lamf = fromIntegral lam
+        n = constant . P.round $ theta * lamf
+
+        p = map (`div3` constant lamf) uvw
+        czero = constant 0
+        guv = fill (index2 n n) czero :: Acc (Matrix Visibility)
+
+        -- We just make them all here, that's easiest for now
+        (_,_,w) = unzip3 uvw
+        closestw = map (findClosest wbins) w
+        (a1, a2, _, _) = unzip4 src
+        index = zipWith3 (\x y z -> lift (x, A.fromIntegral y, A.fromIntegral z)) closestw a1 a2
+        --Normally we conjugate the kernel here, but we do it later on in the convgrid3 (or processOne) function somewhere
+    in convgrid3 wkernels akernels guv p index vis
 ----------------------------------
 -- Processing the imaging functions
 do_imaging :: F                                -- Field of view size
