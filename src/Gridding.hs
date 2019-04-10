@@ -337,7 +337,7 @@ convgridSeq wkerns akerns a p index v =
         addCoords vis xy = let
             (x,y) = unlift . the $ xy :: (Exp Int, Exp Int)
             indexmapper (unlift . unindex2 -> (i, j)::(Exp Int,Exp Int)) vis =
-                    lift ( x + j - halfgw, y + i - halfgh, vis)
+                    lift ( x + i - halfgw, y + j - halfgh, vis)
             in imap indexmapper vis
 
         visAndCoordSeq = zipWithSeq addCoords visKernSeq coordsSeq
@@ -361,8 +361,9 @@ processOneSeq wkerns akerns
             a2 = slice akerns (lift (Z :. a2index :. All :. All))
             w  = slice wkerns (lift (Z :. wbin :. yf :. xf :. All :. All))
             --Convolve them
+            -- NOTE, the conjugate normally happens in imaging function, but it is convenient to do it here.
             akern = convolve2d a1 a2
-            awkern = convolve2d w akern
+            awkern = map conjugate $ convolve2d w akern
 
             -- Let the visibility have the same dimensions as the aw-kernel
             allvis = replicate ( lift ( Z :. gh :. gw)) (unit vis)
