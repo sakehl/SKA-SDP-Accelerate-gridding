@@ -1,7 +1,8 @@
 {-# language TypeOperators       #-}
 {-# language ViewPatterns        #-}
 {-# language ScopedTypeVariables #-}
-{-# LANGUAGE TemplateHaskell #-}
+{-# language TemplateHaskell     #-}
+{-# language TypeApplications    #-}
 module ImageDataset where
 
 import Types
