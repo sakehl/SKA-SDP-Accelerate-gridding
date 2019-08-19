@@ -2,13 +2,14 @@
 {-# language ViewPatterns        #-}
 {-# language ScopedTypeVariables #-}
 {-# language TemplateHaskell #-}
+{-# language FlexibleContexts #-}
 {-# language Rank2Types #-}
 module ImageDataset where
 
 import Types
 import Gridding
 import Hdf5
-import Text.Printf
+import FFT
 
 import Data.Array.Accelerate                              as A hiding (fromInteger, fromRational, fromIntegral)
 import qualified Data.Array.Accelerate                    as A (fromInteger, fromRational, fromIntegral)
@@ -26,6 +27,7 @@ import qualified Prelude as P
 import Prelude as P (fromIntegral, fromInteger, fromRational, String, return, (>>=), (>>), IO, Maybe(..), maybe)
 import qualified Data.List as L (sort,(!!),sortBy)
 import Data.Time.Clock
+import Text.Printf
 
 type Runners b = (forall a . Arrays a => Acc a -> a) -> b
 
@@ -45,9 +47,9 @@ aw_gridding run wfile afile datfile n outfile = do
     akerns <- getAKernels afile theta t f
     wkerns <- getWKernels wfile theta
     let oargs = noOtherArgs
-        akernels = use akerns
-        wkernels = use (P.fst wkerns)
-        wbins    = use (P.snd wkerns)
+        akernels_ = use akerns
+        wkernels_ = use (P.fst wkerns)
+        wbins_    = use (P.snd wkerns)
         args = noArgs
         len = constant . maybe (arraySize . arrayShape  $ vis) P.id $ n
         len_ = lift (Z :. len) :: Exp DIM1
@@ -56,8 +58,8 @@ aw_gridding run wfile afile datfile n outfile = do
         u = slice uvwmat (constant (Z :. All :. (0 :: Int)))
         v = slice uvwmat (constant (Z :. All :. (1 :: Int)))
         w = slice uvwmat (constant (Z :. All :. (2 :: Int)))
-        uvw0 = uvw_lambda f . take len $ zip3 u v w
-        vis0 = take len $ use vis
+        uvw0_ = uvw_lambda f . take len $ zip3 u v w
+        vis0_ = take len $ use vis
 
         ones = fill len_ 1
 
@@ -65,8 +67,10 @@ aw_gridding run wfile afile datfile n outfile = do
         (uvw1,vis1) = unzip $ mirror_uvw uvw0 vis0
 
         myuvw = uvw1
-        mysrc = src0
+        mysrc_ = src0
         myvis = vis1
+
+        (wkernels, wbins, akernels, uvw0, mysrc, vis0) = if False then artificialData else (wkernels_, wbins_, akernels_, uvw0_, mysrc_, vis0_)
         
         {-
         uvgridf = $(CPU.runQ (aw_imaging noArgs noOtherArgs 0.008 300000))
@@ -79,13 +83,21 @@ aw_gridding run wfile afile datfile n outfile = do
 
         gridN = P.round $ theta * lamf
         gridshape = Z :. gridN :. gridN :: DIM2
-        img = run . map real {-. ifftShape gridshape-} $ uvgrid1
-        max = run . maximum . flatten . use $ img
+        img = map real . ifft $ uvgrid1
+        max = run . maximum . flatten $ img
+    P.putStrLn $ "n = " P.++ P.show len
     P.putStrLn "Start imaging"
     case outfile of
         Nothing -> return ()
-        Just fn -> do createh5File fn; createDatasetDouble fn "/img" img
+        Just fn -> do createh5File fn; createDatasetDouble fn "/img" (run img)
     --return maxrun
+    --P.writeFile "ShowedProgram.hs" (P.show uvgrid1)
+    --return (fromList Z [0.0])
+    --P.print (run myuvw)
+    --P.print (run mysrc)
+    --P.print (run myvis)
+
+    
     return $ max
 
     where
@@ -199,3 +211,17 @@ arrayReshape = reshape2
 reshape2 :: (Shape sh, Shape sh', Elt e) => sh -> Array sh' e -> Array sh e
 reshape2 sh (Array sh' adata)
   = Array (fromElt sh) adata
+
+artificialData :: (Acc (Array DIM5 Visibility), Acc (Vector BaseLine), Acc (Array DIM3 Visibility), Acc (Vector BaseLines), Acc (Vector (Antenna, Antenna, Time, Frequency)), Acc (Vector Visibility))
+artificialData = (wkerns, wbin, akerns, uvw, src, vis)
+    where
+        wkerns = generate (constant (Z :. 1 :. 1 :. 1 :. 15 :. 15)) f
+            where
+                f (unlift -> (Z :. n :. yf :. xf :. y :. x) :: Z :. Exp Int :. Exp Int :. Exp Int :. Exp Int :. Exp Int) = A.fromIntegral x * constant (0.01 :+ 0.005) + 0.1
+        wbin   = use $ fromList (Z :. 1) [0]
+        akerns = generate (constant (Z :. 10 :. 15 :. 15)) f
+            where
+                f (unlift -> (Z :. n :. y :. x) :: Z :. Exp Int :. Exp Int :. Exp Int) = A.fromIntegral (x+y) * constant (0.01 :+ (-0.005)) + 0.008 + A.fromIntegral n * constant (0 :+ 0.1)
+        uvw = use $ fromList (Z :. 2) [(0.1, 0.2, 0.3), (-0.1, 0.4, 0.1)]
+        src = use $ fromList (Z :. 2) [(0, 1, 0.0, 0.0), (0, 2, 0.0, 0.0)]
+        vis = use $ fromList (Z :. 2) [0.3 :+ 0.5, 0.4 :+ 0.2]

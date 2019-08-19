@@ -7,11 +7,13 @@
 module Gridding where
 
 import Types
+import FFT
+import Utility
 
 import Data.Array.Accelerate                              as A hiding (fromInteger, fromRational, fromIntegral)
 import qualified Data.Array.Accelerate                    as A (fromInteger, fromRational, fromIntegral)
 import Data.Array.Accelerate.Data.Complex                 as A
-import Data.Array.Accelerate.Math.DFT.Centre              as A hiding (shift2D)
+import Data.Array.Accelerate.Math.DFT.Centre              as A
 import Data.Array.Accelerate.Math.FFT                     as A 
 
 import Data.Array.Accelerate.LLVM.Native                  as CPU
@@ -324,14 +326,14 @@ convgridSeq wkerns akerns a p index v =
         halfgw = gw `div` 2
 
         --Gather the coords, make them into ints and fractions and zip with visibility
-        coords = frac_coords (lift (height, width)) qpx p
+        coords             = frac_coords (lift (height, width)) qpx p
         (cx, cxf, cy, cyf) = unzip4 coords
-        (wbin, a1, a2) = A.unzip3 index
-        visIndex = A.zip6 wbin a1 a2 cxf cyf v
+        (wbin, a1, a2)     = A.unzip3 index
+        visIndex           = A.zip6 wbin a1 a2 cxf cyf v
         
-        visSeq = toSeq (constant (Z :. (0::Int))) visIndex
-        coordsSeq = toSeq (constant (Z :. (0::Int))) $ A.zip cx cy
-        visKernSeq = mapSeq (compute . processOneSeq wkerns akerns) visSeq
+        visSeq     = toSeqInner visIndex
+        coordsSeq  = toSeqInner $ A.zip cx cy
+        visKernSeq = mapSeq (processOneSeq wkerns akerns) visSeq
             
         addCoords :: Acc (Matrix Visibility) -> Acc (Scalar (Int, Int)) -> Acc (Matrix (Int, Int, Visibility))
         addCoords vis xy = let
@@ -347,7 +349,7 @@ convgridSeq wkerns akerns a p index v =
         indexer id = let y' = ys ! id
                          x' = xs ! id
                      in index2 y' x'
-    in compute $ permute (+) a indexer resvis
+    in permute (+) a indexer resvis
 
 processOneSeq ::  Acc (Array DIM5 Visibility) -> Acc (Array DIM3 Visibility) -> Acc (Scalar (Int, Int, Int, Int, Int, Visibility)) ->  Acc (Matrix Visibility)
 processOneSeq wkerns akerns 
@@ -364,6 +366,7 @@ processOneSeq wkerns akerns
             -- NOTE, the conjugate normally happens in imaging function, but it is convenient to do it here.
             akern = convolve2d a1 a2
             awkern = map conjugate $ convolve2d w akern
+            --awkern = convolve3_2d a1 a2 w
 
             -- Let the visibility have the same dimensions as the aw-kernel
             allvis = replicate ( lift ( Z :. gh :. gw)) (unit vis)
@@ -627,54 +630,6 @@ kernel_oversample ff n qpx s =
         af = ifft padff
     in extract_oversampled af qpx s
 
-pad_mid :: Acc (Matrix Visibility)    -- The input far field. Should be smaller than NxN
-        -> Exp Int                    -- The desired far field size
-        -> Acc (Matrix Visibility)    -- The far field, NxN
-pad_mid ff n =
-    let
-        Z :. n0 :. n0w = (unlift . shape) ff :: Z :. Exp Int :. Exp Int
-        result = if n == n0 then ff else padded
-        pad_width = lift ((n `div` 2)-(n0 `div` 2), ((n+1) `div` 2)-((n0+1) `div` 2))
-        padded = padder ff pad_width pad_width 0
-    in result
-
---Extract a section from middle of a map Suitable for zero frequencies at N/2. This is the reverse operation to pad.
-extract_mid :: Acc (Matrix Visibility)  -- grid from which to extract
-            -> Exp Int                  -- size of section
-            -> Acc (Matrix Visibility)
-extract_mid a n = 
-    let
-        Z :. x :. y = (unlift. shape) a :: Z :. Exp Int :. Exp Int
-        cx = x `div` 2
-        cy = y `div` 2
-        s  = n `div` 2
-        --o  = if odd n then 1 else 0
-        res = slit (cx -s) n . slit2 (cy -s) n $ a
-        --r1 = dropOn _1 (cx -s) . takeOn _1 (cx + s + o) $ a
-        --res = dropOn _2 (cy -s) . takeOn _2 (cy + s + o) $ r1
-    in res  
-
-extract_oversampled :: Acc (Matrix Visibility)        -- grid from which to extract
-                    -> Exp Int                              -- oversampling factor
-                    -> Exp Int                              -- size of section
-                    -> Acc (Array DIM4 Visibility)    -- Return the oversampled kernels with shape qpx x qpx x n x n
-extract_oversampled a qpx n =
-    let
-        -- In contrast to the python code, we return all the oversampled kernels at once, instead of one at a time
-        na = (indexHead . shape) a
-        cons = (na `div` 2) - qpx * (n `div` 2)
-        m x = cons - x
-
-        news = lift (Z :. qpx :. qpx :. n :. n) :: Exp DIM4
-        indexer (unlift -> Z :. yf :. xf :. y :. x :: Z :. Exp Int :. Exp Int :. Exp Int :. Exp Int)
-            =  let newy = m yf + qpx * y
-                   newx = m xf + qpx * x
-               in index2 newy newx
-
-        w_kern = backpermute news indexer a
-        qpx2 = A.fromIntegral (qpx * qpx)
-    in map (*qpx2) w_kern 
-
 aw_kernel_fn :: Exp Int
              -> Exp Int
              -> AKernelF 
@@ -736,7 +691,7 @@ convolve2dO a1 a2 =
         a2fft = myfft2D Inverse . ishift2D $ pad_mid a2 n
         a1a2 = zipWith (*) a1fft a2fft
         convolved = shift2D . myfft2D Forward $ a1a2
-        mid = extract_mid convolved n_
+        mid = extract_mid n_ convolved
     in map (*n2) mid
 
 -- More precise method
@@ -751,256 +706,30 @@ convolve2d a1 a2 =
         m2 = A.fromIntegral $ m * m
         
 
-        a1fft = myfft2D32 Inverse . ishift2D $ pad_mid a1 m
-        a2fft = myfft2D32 Inverse . ishift2D $ pad_mid a2 m
+        a1fft = myfft2D Inverse . ishift2D $ pad_mid a1 m
+        a2fft = myfft2D Inverse . ishift2D $ pad_mid a2 m
         a1a2 = zipWith (*) a1fft a2fft
-        convolved = shift2D . myfft2D32 Forward $ a1a2
-        mid = extract_mid convolved n
+        convolved = shift2D . myfft2D Forward $ a1a2
+        mid = extract_mid n convolved
     in map (*m2) mid
 
-----------------------
--- Fourier transformations
-fftO :: Acc (Matrix Visibility) -> Acc (Matrix Visibility)
-fftO = shift2D . myfft2D Forward . ishift2D
-
-ifftO :: Acc (Matrix Visibility) -> Acc (Matrix Visibility)
-ifftO = shift2D . myfft2D Inverse . ishift2D
-
-fft :: Acc (Matrix Visibility) -> Acc (Matrix Visibility)
-fft m = (`extract_mid` n_) . shift2D . myfft2D Forward . ishift2D . (`pad_mid` n) $ m
-    where
-        (Z :. n_ :. _) = (unlift . shape) m :: Z :. Exp Int :. Exp Int
-        pw = A.ceiling (logBase 2 (A.fromIntegral n_) :: Exp F) :: Exp Int
-        n = 2 ^ pw :: Exp Int
-
-fftShape :: DIM2 -> Acc (Matrix Visibility) -> Acc (Matrix Visibility)
-fftShape sh = (`extract_mid` oldn) . shift2D . fft2D' Forward newsh . ishift2D . (`pad_mid` padn)
-        where
-            (Z :. n_ :. _) = sh :: Z :. Int :. Int
-            pw = P.ceiling (P.logBase 2 (P.fromIntegral n_) :: F) :: Int
-            n = 2 P.^ pw :: Int
-            newsh = Z :. n :. n
-            oldn = constant n_
-            padn = constant n
-
-
-ifft :: Acc (Matrix Visibility) -> Acc (Matrix Visibility)
---ifft m = shift2D . myfft2D Inverse . ishift2D $ m
-ifft m = (`extract_mid` n_) . shift2D . myfft2D Inverse . ishift2D . (`pad_mid` n) $ m
-    where
-        (Z :. n_ :. _) = (unlift . shape) m :: Z :. Exp Int :. Exp Int
-        pw = A.ceiling (logBase 2 (A.fromIntegral n_) :: Exp F) :: Exp Int
-        n = 2 ^ pw :: Exp Int
-
-ifftShape :: DIM2 -> Acc (Matrix Visibility) -> Acc (Matrix Visibility)
-ifftShape sh = (`extract_mid` oldn) . shift2D . fft2D' Inverse newsh . ishift2D . (`pad_mid` padn)
-        where
-            (Z :. n_ :. _) = sh :: Z :. Int :. Int
-            pw = P.ceiling (P.logBase 2 (P.fromIntegral n_) :: F) :: Int
-            n = 2 P.^ pw :: Int
-            newsh = Z :. n :. n
-            oldn = constant n_
-            padn = constant n
-
-------------------------
--- Helper functions
-div3 :: Exp BaseLines -> Exp F -> Exp BaseLines
-div3 (unlift -> (a,b,c)) x = lift (a / x, b / x, c / x)
-
-myfor :: Int -> (Int -> a -> a) -> a -> a
-myfor n f x | n P.== 0    = x
-            | P.otherwise =  myfor (n-1) f (f (n-1) x)
-
-liftTupf :: (Elt a, Elt b) => (Exp a -> Exp a) -> (Exp b -> Exp b) -> Exp (a,b) -> Exp (a,b)
-liftTupf f g (unlift -> (a, b)) = lift (f a, g b)
-
-afor :: forall a. Arrays a => Exp Int -> (Exp Int -> Acc a -> Acc a) -> Acc a -> Acc a
-afor n f m = let
-    newf :: Acc (Scalar Int, a) -> Acc (Scalar Int, a)
-    newf (unlift -> (i, m) :: (Acc (Scalar Int), Acc a)) = 
-        let i' = map (+1) i 
-        in lift (i', f (the i) m)
-
-    condition :: Acc (Scalar Int, a) -> Acc (Scalar Bool)
-    condition (unlift -> (i, m) :: (Acc (Scalar Int), Acc a)) = map (<n) i
-
-    initial :: Acc (Scalar Int, a)
-    initial = lift (unit 0, m)
-    in asnd $ awhile condition newf initial
-
-
-padder :: Elt a => Acc (Matrix a) -> Exp (Int, Int) -> Exp (Int, Int) -> Exp a ->  Acc (Matrix a)
-padder array pad_width_x pad_width_y constant_val =
+convolve3_2d :: Acc (Matrix Visibility) -> Acc (Matrix Visibility) -> Acc (Matrix Visibility) -> Acc (Matrix Visibility)
+convolve3_2d a1 a2 a3 = 
     let
-        (x0, x1) = unlift pad_width_x :: (Exp Int, Exp Int)
-        (y0, y1) = unlift pad_width_y :: (Exp Int, Exp Int)
-        Z :. m :. n = (unlift . shape) array :: ( Z :. Exp Int :. Exp Int)
-        newshape = index2 (m + y0 + y1) (n + x0 + x1)
-
-        indexer (unlift -> Z :. y :. x :: Z :. Exp Int :. Exp Int)
-            = let oldx = x - x0
-                  oldy = y - y0
-                  inrange = oldx >= 0 && oldx < n && oldy >= 0 && oldy < m
-                  oldval  = array ! index2 oldx oldy
-            in if inrange then oldval else constant_val
-    in generate newshape indexer
-
-c0 :: Exp Int
-c0 = constant 0
-
--- Check if the coordinates are out of bounds, and sets them to zero otherwise
-fixoutofbounds :: Elt a => Exp Int -> Exp Int -> Exp a -> Exp (Int, Int, a) -> Exp (Int, Int, a)
-fixoutofbounds maxx maxy defv
-                old@(unlift -> (x', y', _) ::(Exp Int,Exp Int,Exp a)) =
-    let outofbounds = x' < c0 || y' < c0 || x' >= maxx || y' >= maxy
-        -- If out of bounds, set all values to zero (after the offset alters it)
-        defx = c0 :: Exp Int
-        defy = c0 :: Exp Int
-        def = lift (defx, defy, defv)
-    in if outofbounds then def else old
-
-findClosest :: (Elt a, Num a, Ord a) => Acc (Vector a) -> Exp a -> Exp Int
-findClosest ws w =
-    let cmp (unlift -> (min, max) :: (Exp Int, Exp Int)) = (max - min) `div` 2 >= 1
-        f (unlift -> (min, max) :: (Exp Int, Exp Int)) = 
-            let id = (max + min) `div` 2
-            in if w > ws !! id 
-                then lift (id, max)
-                else lift (min, id)
-        Z :. max = unlift . shape $ ws :: Z :. Exp Int  
-        minmax = lift (0 :: Exp Int, max)
+        (Z :. n :. _) = (unlift . shape) a1 :: Z :. Exp Int :. Exp Int
+        m_ = 2*n - 1
+        -- We need m to be a power of 2
+        pw = A.ceiling (logBase 2 (A.fromIntegral m_) :: Exp F) :: Exp Int
+        m = 2 ^ pw
+        m2 = A.fromIntegral $ m * m
         
-        (r1, r2) = unlift . while cmp f $ minmax :: (Exp Int, Exp Int)
-    in if abs (w - ws !! r1) < abs (w - ws !! r2) then r1 else r2
 
--- || FFT shifts and stuff
--- | Apply the shifting transform to a vector
---  
-shift1D :: Elt e => Acc (Vector e) -> Acc (Vector e)
-shift1D arr = backpermute sh p arr  
-      where
-        sh      = shape arr
-        n       = indexHead sh
-        --
-        shift   = (n `quot` 2) + boolToInt (A.odd n)
-        roll i  = (i+shift) `rem` n
-        p       = ilift1 roll
+        a1fft = myfft2D Inverse . ishift2D $ pad_mid a1 m
+        a2fft = myfft2D Inverse . ishift2D $ pad_mid a2 m
+        a3fft = myfft2D Inverse . ishift2D $ pad_mid a3 m
 
--- | The inverse of the shift1D function, such that 
--- > ishift1D (shift1D v) = ishift1D (shift1D v) = v
--- for all vectors
---          
-ishift1D :: Elt e => Acc (Vector e) -> Acc (Vector e)
-ishift1D arr = backpermute sh p arr  
-      where
-        sh      = shape arr
-        n       = indexHead sh
-        --
-        shift   = (n `quot` 2)-- + boolToInt (A.odd n)
-        roll i  = (i+shift) `rem` n
-        p       = ilift1 roll
+        a1a2a3 = zipWith3 (\x y z -> x * y * z) a1fft a2fft a3fft
 
--- | Apply the shifting transform to a 2D array
---
-shift2D :: Elt e => Acc (Array DIM2 e) -> Acc (Array DIM2 e)
-shift2D arr
-  = backpermute sh p arr
-  where
-    sh      = shape arr
-    Z :. h :. w = unlift sh
-    --
-    shifth = (h `quot` 2) + boolToInt (A.odd h)
-    shiftw = (w `quot` 2) + boolToInt (A.odd w)
-
-    p ix
-      = let Z:.y:.x = unlift ix :: Z :. Exp Int :. Exp Int
-        in index2 ((y + shifth) `rem` h)
-                  ((x + shiftw) `rem` w)
-
--- | The inverse of the shift2D function
---
-ishift2D :: Elt e => Acc (Array DIM2 e) -> Acc (Array DIM2 e)
-ishift2D arr
-  = backpermute sh p arr
-  where
-    sh      = shape arr
-    Z :. h :. w = unlift sh
-    --
-    shifth = (h `quot` 2)
-    shiftw = (w `quot` 2)
-
-    p ix
-      = let Z:.y:.x = unlift ix :: Z :. Exp Int :. Exp Int
-        in index2 ((y + shifth) `rem` h)
-                  ((x + shiftw) `rem` w)
-
--- | Apply the shifting transform to a 3D array
---                  
-shift3D :: Elt e => Acc (Array DIM3 e) -> Acc (Array DIM3 e)
-shift3D arr
-  = backpermute sh p arr
-  where
-    sh      = shape arr
-    Z :. d :. h :. w = unlift sh
-    --
-    shiftd = (d `quot` 2) + boolToInt (A.odd d)
-    shifth = (h `quot` 2) + boolToInt (A.odd h)
-    shiftw = (w `quot` 2) + boolToInt (A.odd w)
-
-    p ix
-      = let Z:.z:.y:.x = unlift ix :: Z :. Exp Int :. Exp Int :. Exp Int
-        in index3 ((z + shiftd) `rem` d)
-                  ((y + shifth) `rem` h)
-                  ((x + shiftw) `rem` w)
-
--- | The inverse of the shift3D function
---
-ishift3D :: Elt e => Acc (Array DIM3 e) -> Acc (Array DIM3 e)
-ishift3D arr
-  = backpermute sh p arr
-  where
-    sh      = shape arr
-    Z :. d :. h :. w = unlift sh
-    --
-    shiftd = (d `quot` 2)
-    shifth = (h `quot` 2)
-    shiftw = (w `quot` 2)
-
-    p ix
-      = let Z:.z:.y:.x = unlift ix :: Z :. Exp Int :. Exp Int :. Exp Int
-        in index3 ((z + shiftd) `rem` d)
-                  ((y + shifth) `rem` h)
-                  ((x + shiftw) `rem` w)
-
-myfft2D :: FFTElt e => Mode -> Acc (Array DIM2 (Complex e)) -> Acc (Array DIM2 (Complex e))
-myfft2D = undefined
-
-myfft2D32 :: FFTElt e => Mode -> Acc (Array DIM2 (Complex e)) -> Acc (Array DIM2 (Complex e))
-myfft2D32 mode arr = let
-    --sh = P.head . toList . CPU.run . unit$ shape arr
-    sh = Z :. 32 :. 32
-    in fft2D' mode sh arr
-
-reverse1 :: Elt e => Acc (Matrix e) -> Acc (Matrix e)
-reverse1 xs =
-  let Z :. leny :. lenx = unlift . shape $ xs ::  Z :. Exp Int :. Exp Int
-      pf id = let Z :. y :. x = unlift id :: Z :. Exp Int :. Exp Int
-              in lift (Z :. y :. lenx - x -1)
-  in  backpermute (shape xs) pf xs
-
-reverse2 :: Elt e => Acc (Matrix e) -> Acc (Matrix e)
-reverse2 xs =
-  let Z :. leny :. lenx = unlift . shape $ xs ::  Z :. Exp Int :. Exp Int
-      pf id = let Z :. y :. x = unlift id :: Z :. Exp Int :. Exp Int
-              in lift (Z :. leny - y + 1 :. x)
-  in  backpermute (shape xs) pf xs
-
-slit2 :: Elt e => Exp Int -> Exp Int -> Acc (Matrix e) -> Acc (Matrix e)
-slit2 m n acc =
-  let m'        = the (unit m)
-      n'        = the (unit n)
-      Z :. sy :. sx  = unlift (shape acc)            :: Z :. Exp Int :. Exp Int
-      index ix  = let Z :. j :. i = unlift ix        :: Z :. Exp Int :. Exp Int
-                  in  lift (Z :. j + m' :. i)
-  in
-  backpermute (lift (Z :. n' `min` ((sy - m') `max` 0) :. sx ::Z :. Exp Int :. Exp Int)) index acc
+        convolved = shift2D . myfft2D Forward $ a1a2a3
+        mid = extract_mid n convolved
+    in map (*(m2*m2)) mid

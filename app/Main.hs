@@ -1,24 +1,25 @@
 {-# LANGUAGE CPP #-}
 module Main where
 
-import ImageDataset
-import System.Directory
-import Control.Exception
-import System.IO.Error hiding (catch)
-import System.Environment
-import qualified Data.Array.Accelerate.LLVM.Native      as CPU
-import qualified Data.Array.Accelerate.Interpreter      as I
-import Data.Array.Accelerate.Debug
+import           Control.Exception
+import           Data.Array.Accelerate.Debug
+import qualified Data.Array.Accelerate.Interpreter as I
+import qualified Data.Array.Accelerate.LLVM.Native as CPU
+import           ImageDataset
+import           System.Directory
+
+import           System.Environment
+import           System.IO.Error hiding (catch)
 
 #ifdef ACCELERATE_LLVM_PTX_BACKEND
-import qualified Data.Array.Accelerate.LLVM.PTX         as GPU
+import qualified Data.Array.Accelerate.LLVM.PTX as GPU
 #endif
 
 data Args = Args { n   :: Maybe Int
                  , runner :: Run
                  , input :: String
                  , out :: Maybe String
-                 , flags :: [String]}
+                 , flags :: [String] }
 
 data Run = GPU | CPU | Inter
 
