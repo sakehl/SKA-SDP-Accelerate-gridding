@@ -300,11 +300,12 @@ createDatasetDouble name dataset dat= do
     let vec = A.toVectors $ dat
     createDatasetDoubleV name dataset rank dims vec
 
-{-
+
 createDatasetComplex :: (A.Shape sh) => String -> String -> A.Array sh ComplexDouble -> IO ()
 createDatasetComplex name dataset dat = do
     let dims = SV.map fromIntegral . SV.fromList . reverse . A.shapeToList . A.arrayShape $ dat :: SV.Vector CInt
-    let rank = fromIntegral . SV.length $ dims
-    let vec = A.toVectors $ dat
-    createDatasetComplexV name dataset rank dims vec
--}
+        rank = fromIntegral . SV.length $ dims
+        vec = A.toVectors $ dat
+        (((), reals), imags) = vec 
+        vec2 = SV.zipWith (:+) reals imags
+    createDatasetComplexV name dataset rank dims vec2

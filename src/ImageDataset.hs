@@ -236,3 +236,17 @@ arrayReshape = reshape2
 reshape2 :: (Shape sh, Shape sh', Elt e) => sh -> Array sh' e -> Array sh e
 reshape2 sh (Array sh' adata)
   = Array (fromElt sh) adata
+
+artificialData :: (Acc (Array DIM5 Visibility), Acc (Vector BaseLine), Acc (Array DIM3 Visibility), Acc (Vector BaseLines), Acc (Vector (Antenna, Antenna, Time, Frequency)), Acc (Vector Visibility))
+artificialData = (wkerns, wbin, akerns, uvw, src, vis)
+    where
+        wkerns = generate (constant (Z :. 1 :. 1 :. 1 :. 15 :. 15)) f
+            where
+                f (unlift -> (Z :. n :. yf :. xf :. y :. x) :: Z :. Exp Int :. Exp Int :. Exp Int :. Exp Int :. Exp Int) = A.fromIntegral x * constant (0.01 :+ 0.005) + 0.1
+        wbin   = use $ fromList (Z :. 1) [0]
+        akerns = generate (constant (Z :. 10 :. 15 :. 15)) f
+            where
+                f (unlift -> (Z :. n :. y :. x) :: Z :. Exp Int :. Exp Int :. Exp Int) = A.fromIntegral (x+y) * constant (0.01 :+ (-0.005)) + 0.008 + A.fromIntegral n * constant (0 :+ 0.1)
+        uvw = use $ fromList (Z :. 2) [(0.1, 0.2, 0.3), (-0.1, 0.4, 0.1)]
+        src = use $ fromList (Z :. 2) [(0, 1, 0.0, 0.0), (0, 2, 0.0, 0.0)]
+        vis = use $ fromList (Z :. 2) [0.3 :+ 0.5, 0.4 :+ 0.2]

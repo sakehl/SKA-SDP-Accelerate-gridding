@@ -1,90 +1,116 @@
 cabal-version: 1.12
-
--- This file has been generated from package.yaml by hpack version 0.31.1.
---
--- see: https://github.com/sol/hpack
---
--- hash: 7f754f83b8db39f58a6545923c94120b7a1e2b949bad0900634a49775940934c
-
-name:           ska-sdp-accelerate
-version:        0.1.0.0
-description:    Please see the README on GitHub at <https://github.com/sakehl/SKA-SDP-Accelerate-gridding#readme>
-homepage:       https://github.com/sakehl/SKA-SDP-Accelerate-gridding#readme
-bug-reports:    https://github.com/sakehl/SKA-SDP-Accelerate-gridding/issues
-author:         Lars van den Haak
-maintainer:     Lars van den Haak &lt;l.b.vandenhaak@gmail.com&gt;
-copyright:      Copyright (c) [2019..]. Lars van den Haak &lt;l.b.vandenhaak@gmail.com&gt;
-license:        BSD3
-license-file:   LICENSE
-build-type:     Simple
+name: ska-sdp-accelerate
+version: 0.1.0.0
+license: BSD3
+license-file: LICENSE
+copyright: Copyright (c) [2019..]. Lars van den Haak &lt;l.b.vandenhaak@gmail.com&gt;
+maintainer: Lars van den Haak &lt;l.b.vandenhaak@gmail.com&gt;
+author: Lars van den Haak
+homepage: https://github.com/sakehl/SKA-SDP-Accelerate-gridding#readme
+bug-reports: https://github.com/sakehl/SKA-SDP-Accelerate-gridding/issues
+description:
+    Please see the README on GitHub at <https://github.com/sakehl/SKA-SDP-Accelerate-gridding#readme>
+build-type: Simple
 extra-source-files:
     README.md
     CHANGELOG.md
 
 source-repository head
-  type: git
-  location: https://github.com/sakehl/SKA-SDP-Accelerate-gridding
+    type: git
+    location: https://github.com/sakehl/SKA-SDP-Accelerate-gridding
 
 flag llvm-gpu
-  description: Enable the LLVM backend for NVIDIA GPUs
-  manual: True
-  default: False
+    description:
+        Enable the LLVM backend for NVIDIA GPUs
+    default: False
+    manual: True
 
 library
-  exposed-modules:
-      Gridding
-      Hdf5
-      ImageDataset
-      Types
-  other-modules:
-      Paths_ska_sdp_accelerate
-  hs-source-dirs:
-      src
-  cc-options: -fPIC
-  include-dirs:
-      /usr/include/hdf5/serial
-  c-sources:
-      hdf5/hdf5.cc
-  extra-lib-dirs:
-      /usr/lib/x86_64-linux-gnu/hdf5/serial
-  extra-libraries:
-      hdf5, hdf5_hl
-  build-depends:
-      accelerate
-    , accelerate-fft
-    , accelerate-io
-    , accelerate-llvm-native
-    , base >=4.7 && <5
-    , directory
-    , lens
-    , time
-    , vector
-  if flag(llvm-gpu)
-    cpp-options: -DACCELERATE_LLVM_PTX_BACKEND
+    exposed-modules:
+        Gridding
+        Hdf5
+        ImageDataset
+        Types
+        FFT
+        Utility
+    cc-options: -fPIC
+    c-sources:
+        hdf5/hdf5.cc
+    hs-source-dirs: src
+    other-modules:
+        Paths_ska_sdp_accelerate
+    default-language: Haskell2010
+    extra-libraries:
+        hdf5
+        hdf5_hl
+    extra-lib-dirs: /usr/lib/x86_64-linux-gnu/hdf5/serial
+    include-dirs: /usr/include/hdf5/serial
     build-depends:
-      accelerate-llvm-ptx
-  default-language: Haskell2010
+        accelerate -any,
+        accelerate-fft -any,
+        accelerate-io -any,
+        accelerate-llvm-native -any,
+        base >=4.7 && <5,
+        directory -any,
+        lens -any,
+        time -any,
+        vector -any,
+        fft -any,
+        carray
+    
+    if flag(llvm-gpu)
+        cpp-options: -DACCELERATE_LLVM_PTX_BACKEND
+        build-depends:
+            accelerate-llvm-ptx -any
 
 executable ska-sdp-accelerate-exe
-  main-is: Main.hs
-  other-modules:
-      Paths_ska_sdp_accelerate
-  hs-source-dirs:
-      app
-  ghc-options: -threaded -rtsopts -with-rtsopts=-N -with-rtsopts=-sstderr -O2
-  build-depends:
-      accelerate
-    , accelerate-fft
-    , accelerate-io
-    , accelerate-llvm-native
-    , base >=4.7 && <5
-    , directory
-    , lens
-    , ska-sdp-accelerate
-    , time
-    , vector
-  if flag(llvm-gpu)
-    cpp-options: -DACCELERATE_LLVM_PTX_BACKEND
+    main-is: Main.hs
+    hs-source-dirs: app
+    other-modules:
+        Paths_ska_sdp_accelerate
+    default-language: Haskell2010
+    ghc-options: -threaded -rtsopts -with-rtsopts=-N
+                 -with-rtsopts=-sstderr -O2
     build-depends:
-      accelerate-llvm-ptx
-  default-language: Haskell2010
+        accelerate -any,
+        accelerate-fft -any,
+        accelerate-io -any,
+        accelerate-llvm-native -any,
+        base >=4.7 && <5,
+        directory -any,
+        lens -any,
+        ska-sdp-accelerate -any,
+        time -any,
+        vector -any
+    
+    if flag(llvm-gpu)
+        cpp-options: -DACCELERATE_LLVM_PTX_BACKEND
+        build-depends:
+            accelerate-llvm-ptx -any
+
+executable testing
+    main-is: SeqTesting.hs
+    hs-source-dirs: testing
+    other-modules:
+        Paths_ska_sdp_accelerate
+    default-language: Haskell2010
+    ghc-options: -threaded -rtsopts -with-rtsopts=-N
+                 -with-rtsopts=-sstderr -O2
+    build-depends:
+        accelerate -any,
+        accelerate-fft -any,
+        accelerate-io -any,
+        accelerate-llvm-native -any,
+        base >=4.7 && <5,
+        directory -any,
+        lens -any,
+        ska-sdp-accelerate -any,
+        time -any,
+        vector -any,
+        fft,
+        carray
+    
+    if flag(llvm-gpu)
+        cpp-options: -DACCELERATE_LLVM_PTX_BACKEND
+        build-depends:
+            accelerate-llvm-ptx -any
