@@ -3,6 +3,7 @@
 {-# language TypeOperators       #-}
 {-# language ViewPatterns        #-}
 {-# LANGUAGE GADTs               #-}
+{-# LANGUAGE RankNTypes          #-}
 
 module Main where
 
@@ -11,7 +12,7 @@ import qualified Data.Array.Accelerate                    as A (fromInteger, fro
 import Data.Array.Accelerate.Data.Complex                 as A
 import Data.Array.Accelerate.Math.DFT.Centre              as A
 import Data.Array.Accelerate.Math.FFT                     as A
-import Data.Array.Accelerate.Math.FFT.Type                as A
+-- import Data.Array.Accelerate.Math.FFT.Type                as A
 
 import Data.Array.Accelerate.LLVM.Native                  as CPU
 import Data.Array.Accelerate.Interpreter                  as I
@@ -130,7 +131,7 @@ unsetflags = clearFlags Main.flags
 -- I/O things (for testing)
 
 -- Extensive img data set things
-aw_gridding :: Runners (String -> String -> String -> Maybe Int -> IO (Scalar F))
+aw_gridding :: Runners0 -> String -> String -> String -> Maybe Int -> IO (Scalar F)
 aw_gridding run wfile afile datfile n = do
     --setFlag dump_phases
     let theta    = 0.008
@@ -141,6 +142,7 @@ aw_gridding run wfile afile datfile n = do
     uvw <- readBaselines datfile
     (a1,a2,ts,f) <- readSource datfile
     let t = linearIndexArray ts 0
+        f' = use $ fromList Z [f]
     akerns <- getAKernels afile theta t f
     wkerns <- getWKernels wfile theta
     let oargs = noOtherArgs{akernels = Just akerns, wkernels = Just wkerns}
@@ -157,7 +159,7 @@ aw_gridding run wfile afile datfile n = do
         u = slice uvwmat (constant (Z :. All :. (0 :: Int)))
         v = slice uvwmat (constant (Z :. All :. (1 :: Int)))
         w = slice uvwmat (constant (Z :. All :. (2 :: Int)))
-        uvw0 = uvw_lambda f . take len $ zip3 u v w
+        uvw0 = uvw_lambda f' . take len $ zip3 u v w
         vis0 = take len $ use vis
 
         ones = fill len_ 1
@@ -267,37 +269,40 @@ aw_gridding run wfile afile datfile n = do
 
 
 
-myconvolve2d :: Acc (Matrix Visibility) -> Acc (Matrix Visibility) -> Acc (Matrix Visibility)
-myconvolve2d a1 a2 = 
-    let
-        (Z :. n :. _) = (unlift . shape) a1 :: Z :. Exp Int :. Exp Int
-        m_ = 2*n - 1
-        -- We need m to be a power of 2
-        pw = A.ceiling (logBase 2 (A.fromIntegral m_) :: Exp F) :: Exp Int
-        m = 32 --2 ^ pw
-        m2 = A.fromIntegral $ m * m
+-- myconvolve2d :: Acc (Matrix Visibility) -> Acc (Matrix Visibility) -> Acc (Matrix Visibility)
+-- myconvolve2d a1 a2 = 
+--     let
+--         (Z :. n :. _) = (unlift . shape) a1 :: Z :. Exp Int :. Exp Int
+--         m_ = 2*n - 1
+--         -- We need m to be a power of 2
+--         pw = A.ceiling (logBase 2 (A.fromIntegral m_) :: Exp F) :: Exp Int
+--         m = 32 --2 ^ pw
+--         m2 = A.fromIntegral $ m * m
         
 
-        fft mode = if True then myfft2DAv mode else fft2D mode
+--         fft mode = if True then myfft2DAv mode else fft2D mode
         
-        a1fft = fft Inverse . ishift2D $ pad_mid a1 m
-        a2fft = fft Inverse . ishift2D $ pad_mid a2 m
-        a1a2 = zipWith (*) a1fft a2fft
-        convolved = shift2D . fft Forward $ a1a2
-        mid = extract_mid n convolved
-    in map (*m2) mid
+--         a1fft = fft Inverse . ishift2D $ pad_mid a1 m
+--         a2fft = fft Inverse . ishift2D $ pad_mid a2 m
+--         a1a2 = zipWith (*) a1fft a2fft
+--         convolved = shift2D . fft Forward $ a1a2
+--         mid = extract_mid n convolved
+--     in map (*m2) mid
 
 
-fft2DAvoid :: forall e. (Numeric e) 
-                    => Mode 
-                    -> ForeignAcc (Array DIM2 (Complex e) -> Array DIM2 (Complex e))
-fft2DAvoid mode = ForeignAcc (nameOf mode (undefined::DIM2))
-    $ case numericR::NumericR e of
-              NumericRfloat32 -> liftIO . liftAtoC go
-              NumericRfloat64 -> liftIO . liftAtoC go
-    where
-        go :: FFTWReal r => CArray (Int,Int) (Complex r) -> CArray (Int,Int) (Complex r)
-        go = FFT.dftG (signOf mode) FFT.flags [0,1]
+-- fft2DAvoid :: forall e. (Numeric e) 
+--                     => Mode 
+--                     -> ForeignAcc (Array DIM2 (Complex e) -> Array DIM2 (Complex e))
+-- fft2DAvoid mode = ForeignAcc (nameOf mode (undefined::DIM2))
+--     $ case numericR::NumericR e of
+--               NumericRfloat32 -> liftIO . liftAtoC go
+--               NumericRfloat64 -> liftIO . liftAtoC go
+--     where
+--         go :: FFTWReal r => CArray (Int,Int) (Complex r) -> CArray (Int,Int) (Complex r)
+--         go = FFT.dftG (signOf mode) fftflags [0,1]
 
-myfft2DAv :: Numeric e => Mode -> Acc (Array DIM2 (Complex e)) -> Acc (Array DIM2 (Complex e))
-myfft2DAv mode = foreignAcc (fft2DAvoid mode) $ A.map (\_ -> -89978978.4e0100) {-Bollocks implementation, for checking-}
+-- myfft2DAv :: Numeric e => Mode -> Acc (Array DIM2 (Complex e)) -> Acc (Array DIM2 (Complex e))
+-- myfft2DAv mode = foreignAcc (fft2DAvoid mode) $ A.map (\_ -> -89978978.4e0100) {-Bollocks implementation, for checking-}
+
+-- fftflags :: Flag
+-- fftflags = estimate .|. destroyInput

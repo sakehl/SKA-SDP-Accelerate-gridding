@@ -38,7 +38,7 @@ extra-deps:
 - accelerate-io-1.0.0.1
 #- accelerate-fft-1.1.0.0
 - git:    https://github.com/sakehl/accelerate-fft.git
-  commit: 9f3b4a0852cc52abc73d1f78fe4acab85b7a052e
+  commit: 72cd41b2d0922201dcba40d0929eb3ee513570be
 
 #- llvm-hs-4.0.0.0
 #- llvm-hs-pure-4.0.0.0

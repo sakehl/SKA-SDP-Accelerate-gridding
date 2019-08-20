@@ -43,8 +43,12 @@ library
     extra-libraries:
         hdf5
         hdf5_hl
-    extra-lib-dirs: /usr/lib/x86_64-linux-gnu/hdf5/serial
-    include-dirs: /usr/include/hdf5/serial
+    extra-lib-dirs:
+        /usr/lib/x86_64-linux-gnu/hdf5/serial
+        /mnt/cyclone/spin1/larsvdh/hdf5/lib
+    include-dirs:
+        /usr/include/hdf5/serial
+        /mnt/cyclone/spin1/larsvdh/hdf5/include
     build-depends:
         accelerate -any,
         accelerate-fft -any,
@@ -53,6 +57,7 @@ library
         base >=4.7 && <5,
         directory -any,
         lens -any,
+        lens-accelerate,
         time -any,
         vector -any,
         fft -any,

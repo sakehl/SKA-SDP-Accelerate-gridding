@@ -33,6 +33,7 @@ import Control.Exception
 import Data.Maybe
 
 type Runners = forall a b . (Arrays a, Arrays b) => (Acc a -> Acc b) -> a -> b
+type Runners0 = forall a . Arrays a => Acc a -> a
 
 --aw_gridding :: String -> String -> String -> IO Image
 aw_gridding :: Runners -> String -> String -> String -> Maybe Int -> Maybe String -> IO (Scalar F)
