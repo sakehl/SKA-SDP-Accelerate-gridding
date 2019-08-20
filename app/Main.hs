@@ -18,11 +18,12 @@ data Args = Args { n   :: Maybe Int
                  , runner :: Run
                  , input :: String
                  , out :: Maybe String
-                 , flags :: [String]}
+                 , flags :: [String]
+                 , chunks :: Maybe Int}
 
 data Run = GPU | CPU | Inter
 
-defArgs = Args (Just 1) CPU "data" Nothing []
+defArgs = Args (Just 1) CPU "data" Nothing [] Nothing
 
 main :: IO ()
 main = do
@@ -37,15 +38,19 @@ main = do
         visdata    = dir ++ "/" ++ "SKA1_Low_quick.h5"
         outFile    = out parsedArgs
         fs         = flags parsedArgs
+        chunks_    = chunks parsedArgs
     mapM_ processFlags fs
+    case chunks_ of
+        Nothing -> return ()
+        Just n  -> setEnv "ACCELERATE_FLAGS" ("-chunk-size=" ++ show n)
     case outFile of
         Nothing -> return ()
         Just fn  -> remover fn
     fourier <- case backend of
-        CPU -> aw_gridding CPU.run wkern akern visdata n_ outFile
-        Inter -> aw_gridding I.run wkern akern visdata n_ outFile
+        CPU -> aw_gridding CPU.run1 wkern akern visdata n_ outFile
+        Inter -> aw_gridding I.run1 wkern akern visdata n_ outFile
 #ifdef ACCELERATE_LLVM_PTX_BACKEND
-        GPU -> aw_gridding GPU.run wkern akern visdata n_ outFile
+        GPU -> aw_gridding GPU.run1 wkern akern visdata n_ outFile
 #else
         GPU -> error "GPU implementation not supported, build with flag \"llvm-gpu\""
 #endif
@@ -70,6 +75,7 @@ parser args ("-n":n:xs)   = parser args{n = Just $ read n} xs
 parser args ("-all":xs)   = parser args{n = Nothing} xs
 parser args ("-i":inp:xs) = parser args{input = inp} xs
 parser args ("-o":out:xs) = parser args{out = Just out} xs
+parser args ("-chunks":n:xs) = parser args{chunks = Just $ read n} xs
 parser args@Args{flags = fs} (('-':'d':f):xs) = parser args{flags=f:fs} xs
 parser args xs            = error $ "Error while parsing" ++ show xs
 

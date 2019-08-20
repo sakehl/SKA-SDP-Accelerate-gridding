@@ -331,7 +331,7 @@ convgridSeq wkerns akerns a p index v =
         
         visSeq = toSeq (constant (Z :. (0::Int))) visIndex
         coordsSeq = toSeq (constant (Z :. (0::Int))) $ A.zip cx cy
-        visKernSeq = mapSeq (compute . processOneSeq wkerns akerns) visSeq
+        visKernSeq = mapSeq (processOneSeq wkerns akerns) visSeq
             
         addCoords :: Acc (Matrix Visibility) -> Acc (Scalar (Int, Int)) -> Acc (Matrix (Int, Int, Visibility))
         addCoords vis xy = let
@@ -347,7 +347,7 @@ convgridSeq wkerns akerns a p index v =
         indexer id = let y' = ys ! id
                          x' = xs ! id
                      in index2 y' x'
-    in compute $ permute (+) a indexer resvis
+    in permute (+) a indexer resvis
 
 processOneSeq ::  Acc (Array DIM5 Visibility) -> Acc (Array DIM3 Visibility) -> Acc (Scalar (Int, Int, Int, Int, Int, Visibility)) ->  Acc (Matrix Visibility)
 processOneSeq wkerns akerns 

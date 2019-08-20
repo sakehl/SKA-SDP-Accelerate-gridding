@@ -2,28 +2,26 @@
 # https://docs.haskellstack.org/en/stable/yaml_configuration/
 
 # Resolver to choose a specific stackage snapshot or a compiler version
-resolver: lts-9.0
+resolver: lts-13.10
 allow-newer: true
 
 # User packages to be built
 packages:
 - .
+- ../accelerate-llvm/accelerate-llvm
 
 # Dependency packages to be pulled from upstream that are not in the resolver
 extra-deps:
-- git:    https://github.com/AccelerateHS/accelerate.git
-  commit: 36f86c5e9ed6cd393b69b7c2c295c88d852935c8
+- git:    https://github.com/sakehl/accelerate.git
+  commit: 48a65e20a43fb1a45ff38adc542cb1c79b032ad7
 #  commit: d948d737683bc2f340b56319a4412505274502fc
 
 #
 
-- git:    https://github.com/AccelerateHS/accelerate-llvm.git
-  commit: 56fb32ab6b17bfa724c33a1eee596f573c6ba495
-#- git:    https://github.com/tmcdonell/accelerate-llvm.git
-#  commit: 4a6c35ae4382d8e5de8b74e36a988e5437c5c01a
-#commit: a7a5c89a35f766dd14f6f2a982ea165bed0fcac1
+- git:    https://github.com/sakehl/accelerate-llvm.git
+  commit: 3d48205e008d0f0a57bffa1e6052702d6c3cad29
   subdirs:
-    - accelerate-llvm
+    # - accelerate-llvm
     - accelerate-llvm-native
     - accelerate-llvm-ptx
 
@@ -38,14 +36,24 @@ extra-deps:
 
 - lens-accelerate-0.2.0.0
 - accelerate-io-1.0.0.1
-- accelerate-fft-1.1.0.0
+#- accelerate-fft-1.1.0.0
+- git:    https://github.com/sakehl/accelerate-fft.git
+  commit: 9f3b4a0852cc52abc73d1f78fe4acab85b7a052e
 
-- llvm-hs-4.0.0.0
+#- llvm-hs-4.0.0.0
+#- llvm-hs-pure-4.0.0.0
+- git: https://github.com/sakehl/llvm-hs.git
+  commit: e733ec05c36bab0f3c4f669ada40e6a1416c7c2c
+  subdirs:
+    - llvm-hs
+    - llvm-hs-pure
 
-- llvm-hs-pure-4.0.0.0
 - repa-3.4.1.4
 
 - vector-0.12.0.1
+
+- cuda-0.10.1.0
+- cufft-0.9.0.1
 
 # Override default flag values for local packages and extra-deps
 flags:
@@ -54,6 +62,8 @@ flags:
   accelerate-fft:
     llvm-ptx: false
     llvm-cpu: false
+  ska-sdp-accelerate:
+    llvm-gpu: true
 #  accelerate-llvm-native:
 #    unsafe-checks: true
 #    internal-checks: true
@@ -73,8 +83,8 @@ flags:
 # arch: x86_64
 #
 # Extra directories used by stack for building
-# extra-include-dirs: [/path/to/dir]
-# extra-lib-dirs: [/path/to/dir]
+extra-include-dirs: [/mnt/cyclone/spin1/larsvdh/hdf5/include]
+extra-lib-dirs: [/mnt/cyclone/spin1/larsvdh/hdf5/lib]
 #
 # Allow a newer minor version of GHC than the snapshot specifies
 # compiler-check: newer-minor
