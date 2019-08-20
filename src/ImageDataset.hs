@@ -1,36 +1,46 @@
-{-# language TypeOperators       #-}
-{-# language ViewPatterns        #-}
-{-# language ScopedTypeVariables #-}
-{-# language TemplateHaskell #-}
-{-# language Rank2Types #-}
-{-# language FlexibleContexts#-}
-{-# language TypeFamilies#-}
+{-# LANGUAGE FlexibleContexts    #-}
+{-# LANGUAGE Rank2Types          #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TemplateHaskell     #-}
+{-# LANGUAGE TypeFamilies        #-}
+{-# LANGUAGE TypeOperators       #-}
+{-# LANGUAGE ViewPatterns        #-}
 module ImageDataset where
 
-import Types
-import Gridding
-import Hdf5
-import Text.Printf
+import           Gridding
+import           Hdf5
+import           Text.Printf
+import           Types
 
-import Data.Array.Accelerate                              as A hiding (fromInteger, fromRational, fromIntegral)
-import qualified Data.Array.Accelerate                    as A (fromInteger, fromRational, fromIntegral)
-import Data.Array.Accelerate.Data.Complex                 as A
-import Data.Array.Accelerate.Math.DFT.Centre              as A
-import Data.Array.Accelerate.Math.FFT                     as A
+import           Data.Array.Accelerate                 as A hiding (fromInteger,
+                                                             fromIntegral,
+                                                             fromRational)
+import qualified Data.Array.Accelerate                 as A (fromInteger,
+                                                             fromIntegral,
+                                                             fromRational)
+import           Data.Array.Accelerate.Data.Complex    as A
+import           Data.Array.Accelerate.Math.DFT.Centre as A
+import           Data.Array.Accelerate.Math.FFT        as A
 
-import qualified Data.Array.Accelerate.LLVM.Native        as CPU
-import qualified Data.Array.Accelerate.Interpreter        as I
-import Data.Array.Accelerate.Debug                        as A
-import Data.Array.Accelerate.Trafo
-import Data.Array.Accelerate.Array.Sugar  as S
+import           Data.Array.Accelerate.Array.Sugar     as S
+import           Data.Array.Accelerate.Debug           as A
+import qualified Data.Array.Accelerate.Interpreter     as I
+import qualified Data.Array.Accelerate.LLVM.Native     as CPU
+import           Data.Array.Accelerate.Trafo
 
-import qualified Prelude as P
-import Prelude as P (fromIntegral, fromInteger, fromRational, String, return, (>>=), (>>), IO, Maybe(..), maybe)
-import qualified Data.List as L (sort,(!!),sortBy)
-import Data.Time.Clock
-import Data.Time.Clock.System
-import Control.Exception
-import Data.Maybe
+import           Control.Exception
+import qualified Data.List                             as L (sort, sortBy, (!!))
+import           Data.Maybe
+import           Data.Time.Clock
+import           Data.Time.Clock.System
+import           Prelude                               as P (IO, Maybe (..),
+                                                             String,
+                                                             fromInteger,
+                                                             fromIntegral,
+                                                             fromRational,
+                                                             maybe, return,
+                                                             (>>), (>>=))
+import qualified Prelude                               as P
 
 type Runners = forall a b . (Arrays a, Arrays b) => (Acc a -> Acc b) -> a -> b
 type Runners0 = forall a . Arrays a => Acc a -> a
@@ -43,7 +53,7 @@ aw_gridding runN wfile afile datfile n outfile = do
         lamf     = fromIntegral lam :: F
     t0 <- getCurrentTime
     P.putStrLn $ "Start loading data"
-    vis <- readVis datfile 
+    vis <- readVis datfile
     uvw <- readBaselines datfile
     (a1,a2,ts,f) <- readSource datfile
     let t = P.head . toList $ ts
@@ -89,9 +99,9 @@ aw_gridding runN wfile afile datfile n outfile = do
             r <- readDatasetDouble file "/vis/uvw"
             return r
 
-        adjustSource :: Exp DIM1 -> Acc (Vector Antenna, Vector Antenna, Vector Time, Scalar Frequency) 
+        adjustSource :: Exp DIM1 -> Acc (Vector Antenna, Vector Antenna, Vector Time, Scalar Frequency)
                      -> Acc (Vector Antenna, Vector Antenna, Vector Time, Vector Frequency)
-        adjustSource n (unlift -> (a1:: Acc (Vector Antenna) ,a2 :: Acc (Vector Antenna) ,ts :: Acc (Vector Time) ,f)) 
+        adjustSource n (unlift -> (a1:: Acc (Vector Antenna) ,a2 :: Acc (Vector Antenna) ,ts :: Acc (Vector Time) ,f))
             = let newf = fill n (the f) in lift (a1, a2, ts, newf)
 
         readSource :: String -> IO (Vector Antenna, Vector Antenna, Vector Time, Scalar Frequency)
@@ -102,15 +112,15 @@ aw_gridding runN wfile afile datfile n outfile = do
             f  <- readDatasetDouble file "/vis/frequency" :: IO (Vector Frequency)
             let f0 = fromList Z . toList $ f
             return (a1, a2, t, f0)
-        
+
         gridder :: F -> Int -> Acc (Scalar Int)
                 -> Acc (Array DIM5 Visibility) -> Acc (Vector BaseLine)
                 -> Acc (Array DIM3 Visibility)
-                -> Acc (Matrix BaseLine) 
+                -> Acc (Matrix BaseLine)
                 -> Acc (Vector Antenna) -> Acc (Vector Antenna) -> Acc (Vector Time) -> Acc (Scalar Frequency)
                 -> Acc (Vector Visibility)
                 -> Acc (Image, Scalar F)
-        gridder theta lam (the -> n) 
+        gridder theta lam (the -> n)
             wkernels wbins akernels
             uvwmat
             a1 a2 ts f
@@ -138,17 +148,17 @@ aw_gridding runN wfile afile datfile n outfile = do
         toTupF :: (Acc (Scalar Int)
                 -> Acc (Array DIM5 Visibility) -> Acc (Vector BaseLine)
                 -> Acc (Array DIM3 Visibility)
-                -> Acc (Matrix BaseLine) 
+                -> Acc (Matrix BaseLine)
                 -> Acc (Vector Antenna) -> Acc (Vector Antenna) -> Acc (Vector Time) -> Acc (Scalar Frequency)
                 -> Acc (Vector Visibility)
                 -> Acc (Image, Scalar F))
                 -> Acc (Scalar Int, Array DIM5 Visibility, Vector BaseLine, Array DIM3 Visibility
-                    , Matrix BaseLine, Vector Antenna, Vector Antenna, Vector Time, Scalar Frequency, Vector Visibility) 
+                    , Matrix BaseLine, Vector Antenna, Vector Antenna, Vector Time, Scalar Frequency, Vector Visibility)
                 -> Acc (Image, Scalar F)
-        toTupF fun (unlift -> (n, wkernels, wbins, akernels, uvwmat, a1, a2, ts, f, vis)) 
+        toTupF fun (unlift -> (n, wkernels, wbins, akernels, uvwmat, a1, a2, ts, f, vis))
             = fun n wkernels wbins akernels uvwmat a1 a2 ts f vis
 
-        
+
 getAKernels :: String -> F -> Time -> Frequency -> IO (Array DIM3 Visibility)
 getAKernels file theta t f = do
     P.putStrLn "Loading A kernels"
@@ -176,7 +186,7 @@ getAKernels file theta t f = do
     P.putStrLn "A kernels loaded"
     return akerns
 
-    
+
 getWKernels :: String -> F -> IO (Array DIM5 Visibility, Vector BaseLine)
 getWKernels file theta = do
     P.putStrLn "Loading W kernels"
@@ -197,14 +207,14 @@ findClosestList ws w =
     let ifte g i e | g = i
                    | P.otherwise = e
         cmp (min, max) = (max P.- min) `P.div` 2 P.>= 1
-        f (min, max) = 
+        f (min, max) =
             let id = (max P.+ min) `P.div` 2
             in ifte (w P.> ws L.!! id)
                 (id, max)
                 (min, id)
         max = P.length ws - 1
         minmax = (0, max)
-        
+
         (r1, r2) = mywhile cmp f $ minmax
         v1 = ws L.!! r1
         v2 = ws L.!! r2

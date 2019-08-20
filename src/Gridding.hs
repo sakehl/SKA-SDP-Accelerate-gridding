@@ -1,40 +1,50 @@
-{-# language FlexibleContexts    #-}
-{-# language RebindableSyntax    #-}
-{-# language ScopedTypeVariables #-}
-{-# language TypeOperators       #-}
-{-# language ViewPatterns        #-}
+{-# LANGUAGE FlexibleContexts    #-}
+{-# LANGUAGE RebindableSyntax    #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeOperators       #-}
+{-# LANGUAGE ViewPatterns        #-}
 
 module Gridding where
 
-import Types
-import FFT
-import Utility
+import           FFT
+import           Types
+import           Utility
 
-import Data.Array.Accelerate                              as A hiding (fromInteger, fromRational, fromIntegral)
-import qualified Data.Array.Accelerate                    as A (fromInteger, fromRational, fromIntegral)
-import Data.Array.Accelerate.Data.Complex                 as A
-import Data.Array.Accelerate.Math.DFT.Centre              as A
-import Data.Array.Accelerate.Math.FFT                     as A 
+import           Data.Array.Accelerate                 as A hiding (fromInteger,
+                                                             fromIntegral,
+                                                             fromRational)
+import qualified Data.Array.Accelerate                 as A (fromInteger,
+                                                             fromIntegral,
+                                                             fromRational)
+import           Data.Array.Accelerate.Data.Complex    as A
+import           Data.Array.Accelerate.Math.DFT.Centre as A
+import           Data.Array.Accelerate.Math.FFT        as A
 
-import Data.Array.Accelerate.LLVM.Native                  as CPU
-import Data.Array.Accelerate.Interpreter                  as I
+import           Data.Array.Accelerate.Interpreter     as I
+import           Data.Array.Accelerate.LLVM.Native     as CPU
 
-import qualified Prelude as P
-import Prelude as P (fromIntegral, fromInteger, fromRational, String, return, (>>=), (>>), IO, Maybe(..), maybe)
+import           Prelude                               as P (IO, Maybe (..),
+                                                             String,
+                                                             fromInteger,
+                                                             fromIntegral,
+                                                             fromRational,
+                                                             maybe, return,
+                                                             (>>), (>>=))
+import qualified Prelude                               as P
 
-import Control.Lens as L (_1, _2, _3, _4, _5)
-import Data.Maybe (fromJust, fromMaybe)
+import           Control.Lens                          as L (_1, _2, _3, _4, _5)
+import           Data.Maybe                            (fromJust, fromMaybe)
 
-import Debug.Trace
+import           Debug.Trace
 
-data KernelOptions = KernelOptions 
+data KernelOptions = KernelOptions
     { patHorShift :: Maybe Int
     , patVerShift :: Maybe Int
     , patTransMat :: Maybe (Acc (Matrix F))
-    , wstep :: Maybe Int
-    , qpx :: Maybe Int              -- The oversampling of the convolution kernel
-    , npixFF :: Maybe Int
-    , npixKern :: Maybe Int         -- Kernel size (if it is same size in x and y)
+    , wstep       :: Maybe Int
+    , qpx         :: Maybe Int              -- The oversampling of the convolution kernel
+    , npixFF      :: Maybe Int
+    , npixKern    :: Maybe Int         -- Kernel size (if it is same size in x and y)
     }
 
 data OtherImagingArgs = OtherImagingArgs
@@ -264,13 +274,13 @@ convgrid3 wkerns akerns a p index v =
         dat = zip5 cx cxf cy cyf v
 
         processer :: Exp Int -> Acc (Matrix Visibility) -> Acc (Matrix Visibility)
-        processer n aa = 
+        processer n aa =
             let id = unit $ index !! n
                 dat = unit $ dat !! n
             in processOne id dat wkerns akerns aa
     in afor n processer a
 
-processOne :: Acc (Scalar (Int, Int, Int)) -> Acc (Scalar(Int, Int, Int, Int, Visibility)) -> Acc (Array DIM5 Visibility) -> Acc (Array DIM3 Visibility) -> Acc (Matrix Visibility) -> Acc (Matrix Visibility) 
+processOne :: Acc (Scalar (Int, Int, Int)) -> Acc (Scalar(Int, Int, Int, Int, Visibility)) -> Acc (Array DIM5 Visibility) -> Acc (Array DIM3 Visibility) -> Acc (Matrix Visibility) -> Acc (Matrix Visibility)
 processOne
     (unlift . the -> (wbin, a1index, a2index) :: (Exp Int, Exp Int, Exp Int))
     (unlift . the -> (x, xf, y, yf, vis)::(Exp Int,Exp Int,Exp Int,Exp Int,Exp Visibility))
@@ -280,14 +290,14 @@ processOne
             halfgh = gh `div` 2
             halfgw = gw `div` 2
             cc0 = (lift (constant 0.0 :+ constant 0.0))
-            
+
             --Get the right aw kernel
             a1 = slice akerns (lift (Z :. a1index :. All :. All))
             a2 = slice akerns (lift (Z :. a2index :. All :. All))
             w  = slice wkerns (lift (Z :. wbin :. All :. All :. All :. All))
             -- NOTE, the conjugate normally happens in imaging function, but it is convenient to do it here.
             awkern = map conjugate $ aw_kernel_fn2 yf xf w a1 a2
-            
+
             --Start at the right coordinates
             startx = x - halfgw
             starty = y - halfgh
@@ -330,11 +340,11 @@ convgridSeq wkerns akerns a p index v =
         (cx, cxf, cy, cyf) = unzip4 coords
         (wbin, a1, a2)     = A.unzip3 index
         visIndex           = A.zip6 wbin a1 a2 cxf cyf v
-        
+
         visSeq     = toSeqInner visIndex
         coordsSeq  = toSeqInner $ A.zip cx cy
         visKernSeq = mapSeq (processOneSeq wkerns akerns) visSeq
-            
+
         addCoords :: Acc (Matrix Visibility) -> Acc (Scalar (Int, Int)) -> Acc (Matrix (Int, Int, Visibility))
         addCoords vis xy = let
             (x,y) = unlift . the $ xy :: (Exp Int, Exp Int)
@@ -352,12 +362,12 @@ convgridSeq wkerns akerns a p index v =
     in permute (+) a indexer resvis
 
 processOneSeq ::  Acc (Array DIM5 Visibility) -> Acc (Array DIM3 Visibility) -> Acc (Scalar (Int, Int, Int, Int, Int, Visibility)) ->  Acc (Matrix Visibility)
-processOneSeq wkerns akerns 
+processOneSeq wkerns akerns
     (unlift . the -> (wbin, a1index, a2index, xf, yf, vis) :: (Exp Int, Exp Int, Exp Int, Exp Int, Exp Int, Exp Visibility)) =
         let Z :. _ :. _ :. _ :. gh :. gw = unlift (shape wkerns) :: Z :. Exp Int :. Exp Int :. Exp Int :. Exp Int :. Exp Int
             halfgh = gh `div` 2
             halfgw = gw `div` 2
-            
+
             --Get the right a and w kernels
             a1 = slice akerns (lift (Z :. a1index :. All :. All))
             a2 = slice akerns (lift (Z :. a2index :. All :. All))
@@ -375,7 +385,7 @@ processOneSeq wkerns akerns
 -- Imaging with a w kernel TODO: It differs from the normal implementation atm, it will only work with w-kernels, not aw-kernels
 w_cache_imaging :: KernelOptions -> OtherImagingArgs -> ImagingFunction
 w_cache_imaging kernops@KernelOptions{wstep = wstep'}
-  otargs@OtherImagingArgs{kernelCache = kernel_cache', kernelFunction = kernel_fn'} 
+  otargs@OtherImagingArgs{kernelCache = kernel_cache', kernelFunction = kernel_fn'}
   theta lam uvw src vis
   =
     let
@@ -407,17 +417,17 @@ w_cache_imaging kernops@KernelOptions{wstep = wstep'}
         (cpumin, cpumax, cpusteps) = CPU.run (unit $ lift (minw, maxw, steps)) `indexArray` Z
 
         wbins = map (\rw' -> (rw' - constant cpumin) `div` wstep) roundedw
-        
+
         makeWKernel :: Int -> Acc (Array DIM5 Visibility)
         makeWKernel i = let wbin = fromList Z $ (fromIntegral $ i * wstep_ + cpumin) : []
                         in use $ compiledMakeWKernel wbin
-        
+
         compiledMakeWKernel = CPU.runN makeWKernel'
-        
+
         makeWKernel' :: Acc (Scalar F) -> Acc (Array DIM5 Visibility)
         makeWKernel' wbin = make5D . map conjugate $ only_wcache (constant theta) wbin kernops
 
-        
+
         make5D mat = let (Z :. yf :. xf :. y :. x) =  (unlift . shape) mat :: (Z :.Exp Int :. Exp Int :. Exp Int :. Exp Int)
                          newsh = lift (Z :. constant 1 :. yf :. xf :. y :. x) :: Exp DIM5
                      in reshape newsh mat
@@ -437,7 +447,7 @@ aw_imaging :: KernelOptions -> OtherImagingArgs -> F -> Int
                 -> Acc (Matrix Visibility)
 aw_imaging kernops@KernelOptions{wstep = wstep', qpx = qpx'}
   otargs@OtherImagingArgs{akernels = akernels'
-                         ,wkernels = wkernels'} theta lam 
+                         ,wkernels = wkernels'} theta lam
         wkernels wbins akernels uvw src vis =
     let
         lamf = fromIntegral lam
@@ -454,7 +464,7 @@ aw_imaging kernops@KernelOptions{wstep = wstep', qpx = qpx'}
         index = zipWith3 (\x y z -> lift (x, A.fromIntegral y, A.fromIntegral z)) closestw a1 a2
         --Normally we conjugate the kernel here, but we do it later on in the convgrid3 (or processOne) function somewhere
     in convgridSeq wkernels akernels guv p index vis
-    
+
 ----------------------------------
 -- Processing the imaging functions
 do_imaging :: F                                -- Field of view size
@@ -632,12 +642,12 @@ kernel_oversample ff n qpx s =
 
 aw_kernel_fn :: Exp Int
              -> Exp Int
-             -> AKernelF 
+             -> AKernelF
              -> Maybe WKernelF
              -> KernelF
 aw_kernel_fn yf xf a_kernel_fn w_kernel_fn' theta w a1' a2' t' f'
     kernops@KernelOptions{qpx = qpx', npixKern = n'} =
-    let 
+    let
         w_kernel_fn = fromMaybe w_kernel w_kernel_fn'
         qpx = fromJust qpx'
         a1 = fromJust a1'
@@ -677,10 +687,10 @@ aw_kernel_fn2 yf xf wkern a1kern a2kern =
         awkern =  convolve2d akern (getkern yf xf wkern)
     in awkern
 
--- the kernels for Aw-gridding will normally be chosen to /not/ overflow the borders 
+-- the kernels for Aw-gridding will normally be chosen to /not/ overflow the borders
 -- Thus we chose the simpler method
 convolve2dO :: Acc (Matrix Visibility) -> Acc (Matrix Visibility) -> Acc (Matrix Visibility)
-convolve2dO a1 a2 = 
+convolve2dO a1 a2 =
     let
         (Z :. n_ :. _) = (unlift . shape) a1 :: Z :. Exp Int :. Exp Int
         pw = A.ceiling (logBase 2 (A.fromIntegral n_) :: Exp F) :: Exp Int
@@ -696,7 +706,7 @@ convolve2dO a1 a2 =
 
 -- More precise method
 convolve2d :: Acc (Matrix Visibility) -> Acc (Matrix Visibility) -> Acc (Matrix Visibility)
-convolve2d a1 a2 = 
+convolve2d a1 a2 =
     let
         (Z :. n :. _) = (unlift . shape) a1 :: Z :. Exp Int :. Exp Int
         m_ = 2*n - 1
@@ -704,17 +714,18 @@ convolve2d a1 a2 =
         pw = A.ceiling (logBase 2 (A.fromIntegral m_) :: Exp F) :: Exp Int
         m = 2 ^ pw
         m2 = A.fromIntegral $ m * m
-        
 
-        a1fft = myfft2D Inverse . ishift2D $ pad_mid a1 m
-        a2fft = myfft2D Inverse . ishift2D $ pad_mid a2 m
+        f a = myfft2D Inverse . ishift2D $ pad_mid a m
+
+        a1fft = f a1
+        a2fft = f a2
         a1a2 = zipWith (*) a1fft a2fft
         convolved = shift2D . myfft2D Forward $ a1a2
         mid = extract_mid n convolved
     in map (*m2) mid
 
 convolve3_2d :: Acc (Matrix Visibility) -> Acc (Matrix Visibility) -> Acc (Matrix Visibility) -> Acc (Matrix Visibility)
-convolve3_2d a1 a2 a3 = 
+convolve3_2d a1 a2 a3 =
     let
         (Z :. n :. _) = (unlift . shape) a1 :: Z :. Exp Int :. Exp Int
         m_ = 2*n - 1
@@ -722,7 +733,7 @@ convolve3_2d a1 a2 a3 =
         pw = A.ceiling (logBase 2 (A.fromIntegral m_) :: Exp F) :: Exp Int
         m = 2 ^ pw
         m2 = A.fromIntegral $ m * m
-        
+
 
         a1fft = myfft2D Inverse . ishift2D $ pad_mid a1 m
         a2fft = myfft2D Inverse . ishift2D $ pad_mid a2 m

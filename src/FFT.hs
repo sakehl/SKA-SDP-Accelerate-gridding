@@ -27,15 +27,22 @@
 module FFT (myfft2D, ifft, fft, ditSplitRadixLoop, Numeric(..), NumericR(..))
   where
 
-import           Data.Array.Accelerate                    hiding (transpose)
+import           Data.Array.Accelerate                      as A hiding
+                                                                  (transpose)
+import           Data.Array.Accelerate.Array.Sugar          (shapeToList,
+                                                             showShape)
 import           Data.Array.Accelerate.Control.Lens.Shape
-import           Data.Array.Accelerate.Data.Bits
+import           Data.Array.Accelerate.Data.Bits            as A
 import           Data.Array.Accelerate.Data.Complex
-import           Data.Array.Accelerate.Math.FFT           hiding
-                                                           (ditSplitRadixLoop,
-                                                           fft)
+import           Data.Array.Accelerate.Math.FFT             hiding
+                                                             (ditSplitRadixLoop,
+                                                             fft)
+import qualified Data.Array.Accelerate.Math.FFT.LLVM.Native as Native
+import qualified Data.Array.Accelerate.Math.FFT.LLVM.PTX    as PTX
+import           Data.Bits                                  as B
+import qualified Prelude                                    as P
+import           Text.Printf
 
-import qualified Prelude                                  as P
 
 data NumericR a where
   NumericRfloat32 :: NumericR Float
@@ -63,11 +70,44 @@ instance (Slice sh, Elt a, Elt b, Elt b', Slice (sh :. b), Slice (sh :. b'))
   _2 = lens (\s   -> let _  :. b :. _ = unlift s :: Exp sh :. Exp b :. Exp a in b)
             (\s b -> let sh :. _ :. a = unlift s :: Exp sh :. Exp b :. Exp a in lift (sh :. b :. a))
 -}
-myfft2D :: (Shape sh, Slice sh, Numeric e)
+myfft2D :: (Numeric e, P.Num e, IsFloating e)
     => Mode
-    -> Acc (Array (sh:.Int) (Complex e))
-    -> Acc (Array (sh:.Int) (Complex e))
-myfft2D = ditSplitRadixLoop
+    -> Acc (Array DIM2 (Complex e))
+    -> Acc (Array DIM2 (Complex e))
+myfft2D = myfft2DV3
+
+myfft2DV1 :: (Numeric e, P.Num e, IsFloating e)
+    => Mode
+    -> Acc (Array DIM2 (Complex e))
+    -> Acc (Array DIM2 (Complex e))
+myfft2DV1 mode arr =
+  let
+    scale = A.fromIntegral (A.size arr)
+    go    = ditSplitRadixLoop mode
+  in case mode of
+      Inverse -> A.map (/scale) (go arr)
+      _       -> go arr
+
+myfft2DV2 :: (Numeric e, P.Num e, IsFloating e)
+    => Mode
+    -> Acc (Array DIM2 (Complex e))
+    -> Acc (Array DIM2 (Complex e))
+myfft2DV2 mode arr =
+  let
+    scale  = A.fromIntegral (A.size arr)
+    go     = transpose . fftV2 sign (Z:.32) width . transpose . fftV2 sign (Z:.width)  height
+    height = 32
+    width  = 32
+    sign   = signOfMode mode
+  in case mode of
+      Inverse -> A.map (/scale) (go arr)
+      _       -> go arr
+
+myfft2DV3 :: (Numeric e, P.Num e, IsFloating e)
+    => Mode
+    -> Acc (Array DIM2 (Complex e))
+    -> Acc (Array DIM2 (Complex e))
+myfft2DV3 = fft2DFor
 
 ifft :: (Shape sh, Slice sh, Numeric e)
     => Acc (Array (sh:.Int) (Complex e))
@@ -93,7 +133,7 @@ fft mode arr =
 
 is2or5smooth :: Exp Int -> (Exp Bool, Exp Bool)
 is2or5smooth len =
-  let maxPowerOfTwo = len .&. negate len
+  let maxPowerOfTwo = len A..&. negate len
       lenOdd        = len `quot` maxPowerOfTwo
   in
   ( 1 == lenOdd
@@ -684,3 +724,86 @@ signOfMode m
       Forward -> -1
       Reverse ->  1
       Inverse ->  1
+
+
+
+
+
+------------------------------------------
+-- For reference the older version, maybe compiling this is faster..
+
+-- Rank-generalised Cooley-Tuckey DFT
+--
+-- We require the innermost dimension be passed as a Haskell value because we
+-- can't do divide-and-conquer recursion directly in the meta-language.
+--
+fftV2 :: forall sh e. (Slice sh, Shape sh, A.RealFloat e, A.FromIntegral Int e)
+    => e
+    -> sh
+    -> Int
+    -> Acc (Array (sh:.Int) (Complex e))
+    -> Acc (Array (sh:.Int) (Complex e))
+fftV2 sign sh sz arr
+  | P.any (P.not . isPow2) (shapeToList (sh:.sz))
+  = error $ printf "fft: array dimensions must be powers-of-two, but are: %s" (showShape (sh:.sz))
+  --
+  | P.otherwise
+  = go sz 0 1
+  where
+    go :: Int -> Int -> Int -> Acc (Array (sh:.Int) (Complex e))
+    go len offset stride
+      | len P.== 2
+      = A.generate (constant (sh :. len)) swivel
+
+      | P.otherwise
+      = combine
+          (go (len `div` 2) offset            (stride * 2))
+          (go (len `div` 2) (offset + stride) (stride * 2))
+
+      where
+        len'    = the (unit (constant len))
+        offset' = the (unit (constant offset))
+        stride' = the (unit (constant stride))
+
+        swivel ix =
+          let sh' :. sz' = unlift ix :: Exp sh :. Exp Int
+          in
+          sz' A.== 0 ? ( (arr ! lift (sh' :. offset')) + (arr ! lift (sh' :. offset' + stride'))
+          {-  A.== 1-} , (arr ! lift (sh' :. offset')) - (arr ! lift (sh' :. offset' + stride')) )
+
+        combine evens odds =
+          let odds' = A.generate (A.shape odds) (\ix -> twiddle len' (indexHead ix) * odds!ix)
+          in
+          append (A.zipWith (+) evens odds') (A.zipWith (-) evens odds')
+
+        twiddle n' i' =
+          let n = A.fromIntegral n'
+              i = A.fromIntegral i'
+              k = 2*pi*i/n
+          in
+          lift ( cos k :+ A.constant sign * sin k )
+
+
+-- Append two arrays. This is a specialised version of (A.++) which does not do
+-- bounds checking or intersection.
+--
+append
+    :: forall sh e. (Slice sh, Shape sh, Elt e)
+    => Acc (Array (sh:.Int) e)
+    -> Acc (Array (sh:.Int) e)
+    -> Acc (Array (sh:.Int) e)
+append xs ys
+  = let sh :. n = unlift (A.shape xs)     :: Exp sh :. Exp Int
+        _  :. m = unlift (A.shape ys)     :: Exp sh :. Exp Int
+    in
+    generate (lift (sh :. n+m))
+             (\ix -> let sz :. i = unlift ix :: Exp sh :. Exp Int
+                     in  i A.< n ? (xs ! lift (sz:.i), ys ! lift (sz:.i-n) ))
+
+
+isPow2 :: Int -> Bool
+-- isPow2 0 = True
+-- isPow2 1 = False
+isPow2 x | x P.== 0    = True
+         | x P.== 1    = False
+         | P.otherwise = x B..&. (x P.- 1) P.== 0

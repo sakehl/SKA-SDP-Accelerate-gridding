@@ -8,7 +8,8 @@ allow-newer: true
 # User packages to be built
 packages:
 - .
-- ../accelerate-llvm/accelerate-llvm
+# - ../accelerate-llvm/accelerate-llvm
+# - ../accelerate-fft
 
 # Dependency packages to be pulled from upstream that are not in the resolver
 extra-deps:
@@ -19,26 +20,18 @@ extra-deps:
 #
 
 - git:    https://github.com/sakehl/accelerate-llvm.git
-  commit: 3d48205e008d0f0a57bffa1e6052702d6c3cad29
+  commit: 74b91a91266e27801eca30b5fe76725995fb79cd
   subdirs:
-    # - accelerate-llvm
+    - accelerate-llvm
     - accelerate-llvm-native
     - accelerate-llvm-ptx
 
-#- git:    https://github.com/tmcdonell/accelerate-fft.git
-#  commit: 782a873c000a89fd521e1ce4107daaf14bdc819d
-
-#- git:    https://github.com/tmcdonell/lens-accelerate.git
-#  commit: b74eb8098735b1ad6cff3c5655af03d3f29b9f8e
-
-#- git: https://github.com/AccelerateHS/accelerate-io.git  
-#  commit: 15c67bf66bf44bc0d6567b0d6f41338bffa178c8
+# #- accelerate-fft-1.1.0.0
+- git:    https://github.com/sakehl/accelerate-fft.git
+  commit: 1e623283e816bc7ac01d0fd5adc4ce3616b25d9d
 
 - lens-accelerate-0.2.0.0
 - accelerate-io-1.0.0.1
-#- accelerate-fft-1.1.0.0
-- git:    https://github.com/sakehl/accelerate-fft.git
-  commit: 72cd41b2d0922201dcba40d0929eb3ee513570be
 
 #- llvm-hs-4.0.0.0
 #- llvm-hs-pure-4.0.0.0
@@ -60,8 +53,8 @@ flags:
   accelerate:
     debug: true
   accelerate-fft:
-    llvm-ptx: false
-    llvm-cpu: false
+    llvm-ptx: true
+    llvm-cpu: true
   ska-sdp-accelerate:
     llvm-gpu: true
 #  accelerate-llvm-native:
