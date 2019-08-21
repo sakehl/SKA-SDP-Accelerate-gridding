@@ -716,9 +716,12 @@ convolve2d a1 a2 =
         m2 = A.fromIntegral $ m * m
 
         f a = myfft2D Inverse . ishift2D $ pad_mid a m
-
         a1fft = f a1
         a2fft = f a2
+
+        -- a1fft = myfft2D Inverse . ishift2D $ pad_mid a1 m
+        -- a2fft = myfft2D Inverse . ishift2D $ pad_mid a2 m
+        
         a1a2 = zipWith (*) a1fft a2fft
         convolved = shift2D . myfft2D Forward $ a1a2
         mid = extract_mid n convolved

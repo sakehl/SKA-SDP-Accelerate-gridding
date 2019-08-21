@@ -24,7 +24,7 @@
 -- package contains other more sophisticated algorithms as well.
 --
 
-module FFT (myfft2D, ifft, fft, ditSplitRadixLoop, Numeric(..), NumericR(..))
+module FFT (myfft2D, ifft, fft, ditSplitRadixLoop, NumericR(..), Mode(..))
   where
 
 import           Data.Array.Accelerate                      as A hiding
@@ -35,13 +35,13 @@ import           Data.Array.Accelerate.Control.Lens.Shape
 import           Data.Array.Accelerate.Data.Bits            as A
 import           Data.Array.Accelerate.Data.Complex
 import           Data.Array.Accelerate.Math.FFT             hiding
-                                                             (ditSplitRadixLoop,
-                                                             fft)
+                                                             (fft)
 import qualified Data.Array.Accelerate.Math.FFT.LLVM.Native as Native
 import qualified Data.Array.Accelerate.Math.FFT.LLVM.PTX    as PTX
 import           Data.Bits                                  as B
 import qualified Prelude                                    as P
 import           Text.Printf
+
 
 
 data NumericR a where
@@ -70,11 +70,12 @@ instance (Slice sh, Elt a, Elt b, Elt b', Slice (sh :. b), Slice (sh :. b'))
   _2 = lens (\s   -> let _  :. b :. _ = unlift s :: Exp sh :. Exp b :. Exp a in b)
             (\s b -> let sh :. _ :. a = unlift s :: Exp sh :. Exp b :. Exp a in lift (sh :. b :. a))
 -}
+
 myfft2D :: (Numeric e, P.Num e, IsFloating e)
     => Mode
     -> Acc (Array DIM2 (Complex e))
     -> Acc (Array DIM2 (Complex e))
-myfft2D = myfft2DV3
+myfft2D = myfft2DV2
 
 myfft2DV1 :: (Numeric e, P.Num e, IsFloating e)
     => Mode
@@ -83,7 +84,7 @@ myfft2DV1 :: (Numeric e, P.Num e, IsFloating e)
 myfft2DV1 mode arr =
   let
     scale = A.fromIntegral (A.size arr)
-    go    = ditSplitRadixLoop mode
+    go    = transpose . ditSplitRadixLoop mode >-> transpose . ditSplitRadixLoop mode
   in case mode of
       Inverse -> A.map (/scale) (go arr)
       _       -> go arr
@@ -95,7 +96,7 @@ myfft2DV2 :: (Numeric e, P.Num e, IsFloating e)
 myfft2DV2 mode arr =
   let
     scale  = A.fromIntegral (A.size arr)
-    go     = transpose . fftV2 sign (Z:.32) width . transpose . fftV2 sign (Z:.width)  height
+    go     = transpose . fftV2 sign (Z:.32) width >-> transpose . fftV2 sign (Z:.width)  height
     height = 32
     width  = 32
     sign   = signOfMode mode

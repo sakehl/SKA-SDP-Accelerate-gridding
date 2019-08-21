@@ -27,11 +27,11 @@ flag llvm-gpu
 
 library
     exposed-modules:
+        FFT
         Gridding
         Hdf5
         ImageDataset
         Types
-        FFT
         Utility
     cc-options: -fPIC
     c-sources:

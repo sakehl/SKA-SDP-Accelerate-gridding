@@ -142,8 +142,8 @@ aw_gridding runN wfile afile datfile n outfile = do
                 uvgrid1 = make_grid_hermitian uvgrid0
 
                 img = map real {-. ifftShape gridshape-} $ uvgrid1
-                max = maximum . flatten $ img
-            in lift (img, max)
+                max' = fold1All max . map abs $ img
+            in lift (img, max')
 
         toTupF :: (Acc (Scalar Int)
                 -> Acc (Array DIM5 Visibility) -> Acc (Vector BaseLine)
