@@ -14,7 +14,7 @@ packages:
 # Dependency packages to be pulled from upstream that are not in the resolver
 extra-deps:
 - git:    https://github.com/sakehl/accelerate.git
-  commit: 48a65e20a43fb1a45ff38adc542cb1c79b032ad7
+  commit: 95ada0a7801cc27a4adcc4b1a1e9a042e44778a5
 #  commit: d948d737683bc2f340b56319a4412505274502fc
 
 #
