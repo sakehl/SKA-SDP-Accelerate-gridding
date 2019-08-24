@@ -24,7 +24,7 @@
 -- package contains other more sophisticated algorithms as well.
 --
 
-module FFT (myfft2D, ifft, fft, ditSplitRadixLoop, NumericR(..), Mode(..))
+module FFT (myfft2D, ifft, fft, ditSplitRadixLoop, NumericR(..), Mode(..), fft2DAdhoc, fft2DOld, FFT.fft2DFor)
   where
 
 import           Data.Array.Accelerate                      as A hiding
@@ -75,13 +75,13 @@ myfft2D :: (Numeric e, P.Num e, IsFloating e)
     => Mode
     -> Acc (Array DIM2 (Complex e))
     -> Acc (Array DIM2 (Complex e))
-myfft2D = myfft2DV2
+myfft2D = FFT.fft2DFor
 
-myfft2DV1 :: (Numeric e, P.Num e, IsFloating e)
+fft2DAdhoc :: (Numeric e, P.Num e, IsFloating e)
     => Mode
     -> Acc (Array DIM2 (Complex e))
     -> Acc (Array DIM2 (Complex e))
-myfft2DV1 mode arr =
+fft2DAdhoc mode arr =
   let
     scale = A.fromIntegral (A.size arr)
     go    = transpose . ditSplitRadixLoop mode >-> transpose . ditSplitRadixLoop mode
@@ -89,11 +89,11 @@ myfft2DV1 mode arr =
       Inverse -> A.map (/scale) (go arr)
       _       -> go arr
 
-myfft2DV2 :: (Numeric e, P.Num e, IsFloating e)
+fft2DOld :: (Numeric e, P.Num e, IsFloating e)
     => Mode
     -> Acc (Array DIM2 (Complex e))
     -> Acc (Array DIM2 (Complex e))
-myfft2DV2 mode arr =
+fft2DOld mode arr =
   let
     scale  = A.fromIntegral (A.size arr)
     go     = transpose . fftV2 sign (Z:.32) width >-> transpose . fftV2 sign (Z:.width)  height
@@ -104,11 +104,11 @@ myfft2DV2 mode arr =
       Inverse -> A.map (/scale) (go arr)
       _       -> go arr
 
-myfft2DV3 :: (Numeric e, P.Num e, IsFloating e)
+fft2DFor :: (Numeric e, P.Num e, IsFloating e)
     => Mode
     -> Acc (Array DIM2 (Complex e))
     -> Acc (Array DIM2 (Complex e))
-myfft2DV3 = fft2DFor
+fft2DFor = Data.Array.Accelerate.Math.FFT.fft2DFor
 
 ifft :: (Shape sh, Slice sh, Numeric e)
     => Acc (Array (sh:.Int) (Complex e))

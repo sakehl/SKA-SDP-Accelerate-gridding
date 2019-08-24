@@ -2,6 +2,7 @@
 module Main where
 
 import ImageDataset
+import FFT
 import System.Directory
 import Control.Exception
 import System.IO.Error hiding (catch)
@@ -19,11 +20,10 @@ data Args = Args { n   :: Maybe Int
                  , input :: String
                  , out :: Maybe String
                  , flags :: [String]
-                 , chunks :: Maybe Int}
+                 , chunks :: Maybe Int
+                 , fftf   :: FFT     }
 
-data Run = GPU | CPU | Inter
-
-defArgs = Args (Just 1) CPU "data" Nothing [] Nothing
+defArgs = Args (Just 1) CPU "data" Nothing [] Nothing Adhoc
 
 main :: IO ()
 main = do
@@ -39,21 +39,35 @@ main = do
         outFile    = out parsedArgs
         fs         = flags parsedArgs
         chunks_    = chunks parsedArgs
-    mapM_ processFlags fs
+        fft_       = fftf parsedArgs
+        runner1 :: Runners
+        runner1    = case backend of
+            CPU   -> CPU.run1
+            Inter -> I.run1
+#ifdef ACCELERATE_LLVM_PTX_BACKEND
+            GPU   -> GPU.run1
+#else
+            GPU -> error "GPU implementation not supported, build with flag \"llvm-gpu\""
+#endif
     case chunks_ of
         Nothing -> return ()
-        Just n  -> setEnv "ACCELERATE_FLAGS" ("-chunk-size=" ++ show n)
+        Just n  -> do putStrLn ("Chunks of " ++ show n); setEnv "ACCELERATE_FLAGS" ("-chunk-size=" ++ show n)
+    
+    myfft<- case fft_ of
+              Adhoc   -> do putStrLn "Adhoc fft"; return fft2DAdhoc
+              Old     -> do putStrLn "Old fft"; return fft2DOld
+              Foreign -> do putStrLn "Foreign fft";return fft2DFor
+        
+    case backend of
+        CPU   -> putStrLn "CPU backend"
+        Inter -> putStrLn "Interpreter backend"
+        GPU   -> putStrLn "GPU backend"
+    mapM_ processFlags fs
+    
     case outFile of
         Nothing -> return ()
         Just fn  -> remover fn
-    fourier <- case backend of
-        CPU -> aw_gridding CPU.run1 wkern akern visdata n_ outFile
-        Inter -> aw_gridding I.run1 wkern akern visdata n_ outFile
-#ifdef ACCELERATE_LLVM_PTX_BACKEND
-        GPU -> aw_gridding GPU.run1 wkern akern visdata n_ outFile
-#else
-        GPU -> error "GPU implementation not supported, build with flag \"llvm-gpu\""
-#endif
+    fourier <- aw_gridding runner1 myfft backend fft_ wkern akern visdata n_ outFile
     putStrLn (show fourier)
 
 
@@ -71,6 +85,11 @@ parser args ("-G":xs)     = parser args{runner = GPU} xs
 parser args ("-gpu":xs)   = parser args{runner = GPU} xs
 parser args ("-GPU":xs)   = parser args{runner = GPU} xs
 parser args ("-Gpu":xs)   = parser args{runner = GPU} xs
+parser args ("-old":xs)   = parser args{fftf = Old} xs
+parser args ("-for":xs)   = parser args{fftf = Foreign} xs
+parser args ("-foreign":xs)
+                          = parser args{fftf = Foreign} xs
+parser args ("-adhoc":xs) = parser args{fftf = Adhoc} xs
 parser args ("-n":n:xs)   = parser args{n = Just $ read n} xs
 parser args ("-all":xs)   = parser args{n = Nothing} xs
 parser args ("-i":inp:xs) = parser args{input = inp} xs

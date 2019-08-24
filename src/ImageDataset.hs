@@ -5,7 +5,9 @@
 {-# LANGUAGE TypeFamilies        #-}
 {-# LANGUAGE TypeOperators       #-}
 {-# LANGUAGE ViewPatterns        #-}
-module ImageDataset where
+module ImageDataset(aw_gridding, Runners, Runners0, Run(..), FFT(..),
+                    getAKernels, getWKernels , uvw_lambda, arrayReshape,
+                   ) where
 
 import           Gridding
 import           Hdf5
@@ -20,7 +22,7 @@ import qualified Data.Array.Accelerate                 as A (fromInteger,
                                                              fromRational)
 import           Data.Array.Accelerate.Data.Complex    as A
 import           Data.Array.Accelerate.Math.DFT.Centre as A
-import           Data.Array.Accelerate.Math.FFT        as A
+import           Data.Array.Accelerate.Math.FFT        as FFT
 
 import           Data.Array.Accelerate.Array.Sugar     as S
 import           Data.Array.Accelerate.Debug           as A
@@ -44,14 +46,25 @@ import qualified Prelude                               as P
 
 type Runners = forall a b . (Arrays a, Arrays b) => (Acc a -> Acc b) -> a -> b
 type Runners0 = forall a . Arrays a => Acc a -> a
+type FFTFunc = FFT.Mode -> Acc (Matrix Visibility) -> Acc (Matrix Visibility)
+type Args    = ( Scalar Int {- Dummy Int to prevent caching of results -}
+               , Scalar Int, Array DIM5 Visibility, Vector BaseLine, Array DIM3 Visibility
+               , Matrix BaseLine, Vector Antenna, Vector Antenna, Vector Time, Scalar Frequency
+               , Vector Visibility
+               )
+
+data Run = GPU | CPU | Inter deriving P.Show
+data FFT = Adhoc | Old | Foreign deriving P.Show
 
 --aw_gridding :: String -> String -> String -> IO Image
-aw_gridding :: Runners -> String -> String -> String -> Maybe Int -> Maybe String -> IO (Scalar F)
-aw_gridding runN wfile afile datfile n outfile = do
+aw_gridding :: Runners -> FFTFunc -> Run -> FFT -> String -> String -> String -> Maybe Int -> Maybe String -> IO Float
+aw_gridding runN myfft backend fftT wfile afile datfile n outfile = do
     let theta    = 0.008
         lam      = 300000 :: Int
         lamf     = fromIntegral lam :: F
     t0 <- getCurrentTime
+
+    -------------------------------------
     P.putStrLn $ "Start loading data"
     vis <- readVis datfile
     uvw <- readBaselines datfile
@@ -60,29 +73,58 @@ aw_gridding runN wfile afile datfile n outfile = do
         f' = P.head . toList $ ts
     akerns <- getAKernels afile theta t f'
     (wkerns, wbins) <- getWKernels wfile theta
+    let n'  = maybe (arraySize . arrayShape  $ vis) P.id $ n
+        len = fromList Z [n']
+        arg :: Int -> Args
+        arg i = (fromList Z [i], len, wkerns, wbins, akerns, uvw, a1, a2, ts, f, vis)
+    evaluate ()
     t1 <- getCurrentTime
     P.putStrLn $ "Data loaded, time taken: " P.++ P.show (diffUTCTime t1 t0)
-    let n'  = maybe (arraySize . arrayShape  $ vis) P.id $ n
-        len = fromList Z . (:[]) $ n'
-        gridderf = runN (toTupF $ gridder theta lam)
-        (img, max) = gridderf (len, wkerns, wbins, akerns, uvw, a1, a2, ts, f, vis)
     if (isNothing n) then P.putStrLn ("Processing all the data: " P.++ P.show n') else return ()
+
+    ----------------------------------------
     P.putStrLn "Start compiling"
+    let gridderf = runN (toTupF $ gridder theta lam)
+        it = iterator gridderf arg
     evaluate gridderf
     t2 <- getCurrentTime
     P.putStrLn $ "Compiling completed, time taken: " P.++ P.show (diffUTCTime t2 t1)
-    P.putStrLn "Start imaging"
-    evaluate max
+
+    -----------------------------------------
+    -- it 0
     t3 <- getCurrentTime
-    P.putStrLn $ "Imaging completed, time taken: " P.++ P.show (diffUTCTime t3 t2)
+    -- P.putStrLn $ "Evaluated once to start up, time taken: " P.++ P.show (diffUTCTime t3 t2)
+
+    ------------------------------------------
+    P.putStrLn "Start imaging"
+    -- timings <- P.mapM it [1..10]
+    timings <- P.mapM it [0]
+    t4 <- getCurrentTime
+    P.putStrLn $ "Benchmarks completed, time taken: " P.++ P.show (diffUTCTime t4 t3)
     case outfile of
         Nothing -> return ()
-        Just fn -> do createh5File fn; createDatasetDouble fn "/img" img
-    let res = printf "%s,%d,%f,%f,%f\n" (P.show t0) n' (differ t1 t0) (differ t2 t1) (differ t3 t2)
-    P.appendFile "data/timings.csv" res
-    return $ max
+        Just fn -> do createh5File fn; createDatasetDouble fn "/img" (P.snd . gridderf $ arg 0)
+    let res t = printf "%s,%s,%s,%d,%f,%f,%f\n" (P.show t0) (P.show backend) (P.show fftT) n' (differ t1 t0) (differ t2 t1) t
+    P.mapM (\t -> P.appendFile "data/timings.csv" (res t)) timings
+    return (average timings)
 
     where
+        average :: [Float] -> Float
+        average xs = P.foldr (+) 0 xs P./ (P.fromIntegral $ P.length xs)
+
+        iterator :: (Args -> (Image,Scalar F))
+                 -> (Int -> Args)
+                 -> Int
+                 -> IO Float
+        iterator f inp i = do
+            t2 <- getCurrentTime
+            let (img, max) = f (inp i)
+            P.putStrLn (P.show max)
+            t3 <- getCurrentTime
+            let timing = differ t3 t2
+            P.putStrLn $ "Iteration " P.++ P.show i P.++" completed, time taken: " P.++ P.show (diffUTCTime t3 t2)
+            return timing
+
         differ :: UTCTime -> UTCTime -> Float
         differ t t' = P.fromRational . P.toRational $ diffUTCTime t t'
 
@@ -138,7 +180,7 @@ aw_gridding runN wfile afile datfile n outfile = do
                 wt = doweight theta lam uvw0 ones
                 (uvw1,vis1) = unzip $ mirror_uvw uvw0 vis0
 
-                uvgrid0  = aw_imaging noArgs noOtherArgs theta lam wkernels wbins akernels uvw1 src0 (zipWith (*) vis1 wt)
+                uvgrid0  = aw_imaging' myfft noArgs noOtherArgs theta lam wkernels wbins akernels uvw1 src0 (zipWith (*) vis1 wt)
                 uvgrid1 = make_grid_hermitian uvgrid0
 
                 img = map real {-. ifftShape gridshape-} $ uvgrid1
@@ -152,10 +194,8 @@ aw_gridding runN wfile afile datfile n outfile = do
                 -> Acc (Vector Antenna) -> Acc (Vector Antenna) -> Acc (Vector Time) -> Acc (Scalar Frequency)
                 -> Acc (Vector Visibility)
                 -> Acc (Image, Scalar F))
-                -> Acc (Scalar Int, Array DIM5 Visibility, Vector BaseLine, Array DIM3 Visibility
-                    , Matrix BaseLine, Vector Antenna, Vector Antenna, Vector Time, Scalar Frequency, Vector Visibility)
-                -> Acc (Image, Scalar F)
-        toTupF fun (unlift -> (n, wkernels, wbins, akernels, uvwmat, a1, a2, ts, f, vis))
+                -> Acc Args -> Acc (Image, Scalar F)
+        toTupF fun (unlift -> (_ :: Acc (Scalar Int), n, wkernels, wbins, akernels, uvwmat, a1, a2, ts, f, vis))
             = fun n wkernels wbins akernels uvwmat a1 a2 ts f vis
 
 

@@ -321,15 +321,15 @@ processOne
                          , vis * awkern ! lift (Z :. i :. j) )
         in permute (+) a indexer val
 
-convgridSeq ::
-             Acc (Array DIM5 Visibility)        -- The oversampled convolution w-kernel
-          -> Acc (Array DIM3 Visibility)        -- The a-kernels
-          -> Acc (Matrix Visibility)            -- Destination grid N x N of complex numbers
-          -> Acc (Vector BaseLines)             -- The uvw baselines, but between -.5 and .5
-          -> Acc (Vector (Int, Int, Int))       -- *DIF* The wbin index of the convolution kernel and the index of the a-kernels
-          -> Acc (Vector Visibility)            -- The visiblities
-          -> Acc (Matrix Visibility)
-convgridSeq wkerns akerns a p index v =
+convgridSeq' :: (Mode -> Acc (Matrix Visibility) -> Acc (Matrix  Visibility))
+             -> Acc (Array DIM5 Visibility)        -- The oversampled convolution w-kernel
+             -> Acc (Array DIM3 Visibility)        -- The a-kernels
+             -> Acc (Matrix Visibility)            -- Destination grid N x N of complex numbers
+             -> Acc (Vector BaseLines)             -- The uvw baselines, but between -.5 and .5
+             -> Acc (Vector (Int, Int, Int))       -- *DIF* The wbin index of the convolution kernel and the index of the a-kernels
+             -> Acc (Vector Visibility)            -- The visiblities
+             -> Acc (Matrix Visibility)
+convgridSeq' myfft wkerns akerns a p index v =
     let Z :. _ :. qpx :. _ :. gh :. gw = unlift (shape wkerns) :: Z :. Exp Int :. Exp Int :. Exp Int :. Exp Int :. Exp Int
         Z :. height :. width = unlift (shape a) :: Z :. Exp Int :. Exp Int
         halfgh = gh `div` 2
@@ -343,7 +343,7 @@ convgridSeq wkerns akerns a p index v =
 
         visSeq     = toSeqInner visIndex
         coordsSeq  = toSeqInner $ A.zip cx cy
-        visKernSeq = mapSeq (processOneSeq wkerns akerns) visSeq
+        visKernSeq = mapSeq (processOneSeq' myfft wkerns akerns) visSeq
 
         addCoords :: Acc (Matrix Visibility) -> Acc (Scalar (Int, Int)) -> Acc (Matrix (Int, Int, Visibility))
         addCoords vis xy = let
@@ -361,8 +361,18 @@ convgridSeq wkerns akerns a p index v =
                      in index2 y' x'
     in permute (+) a indexer resvis
 
-processOneSeq ::  Acc (Array DIM5 Visibility) -> Acc (Array DIM3 Visibility) -> Acc (Scalar (Int, Int, Int, Int, Int, Visibility)) ->  Acc (Matrix Visibility)
-processOneSeq wkerns akerns
+convgridSeq :: Acc (Array DIM5 Visibility)        -- The oversampled convolution w-kernel
+            -> Acc (Array DIM3 Visibility)        -- The a-kernels
+            -> Acc (Matrix Visibility)            -- Destination grid N x N of complex numbers
+            -> Acc (Vector BaseLines)             -- The uvw baselines, but between -.5 and .5
+            -> Acc (Vector (Int, Int, Int))       -- *DIF* The wbin index of the convolution kernel and the index of the a-kernels
+            -> Acc (Vector Visibility)            -- The visiblities
+            -> Acc (Matrix Visibility)
+convgridSeq = convgridSeq' myfft2D
+
+processOneSeq' :: (Mode -> Acc (Matrix Visibility) -> Acc (Matrix Visibility)) 
+               -> Acc (Array DIM5 Visibility) -> Acc (Array DIM3 Visibility) -> Acc (Scalar (Int, Int, Int, Int, Int, Visibility)) ->  Acc (Matrix Visibility)
+processOneSeq' myfft wkerns akerns
     (unlift . the -> (wbin, a1index, a2index, xf, yf, vis) :: (Exp Int, Exp Int, Exp Int, Exp Int, Exp Int, Exp Visibility)) =
         let Z :. _ :. _ :. _ :. gh :. gw = unlift (shape wkerns) :: Z :. Exp Int :. Exp Int :. Exp Int :. Exp Int :. Exp Int
             halfgh = gh `div` 2
@@ -374,13 +384,16 @@ processOneSeq wkerns akerns
             w  = slice wkerns (lift (Z :. wbin :. yf :. xf :. All :. All))
             --Convolve them
             -- NOTE, the conjugate normally happens in imaging function, but it is convenient to do it here.
-            akern = convolve2d a1 a2
-            awkern = map conjugate $ convolve2d w akern
+            akern = convolve2d' myfft a1 a2
+            awkern = map conjugate $ convolve2d' myfft w akern
             --awkern = convolve3_2d a1 a2 w
 
             -- Let the visibility have the same dimensions as the aw-kernel
             allvis = replicate ( lift ( Z :. gh :. gw)) (unit vis)
         in zipWith (*) allvis awkern
+
+processOneSeq ::  Acc (Array DIM5 Visibility) -> Acc (Array DIM3 Visibility) -> Acc (Scalar (Int, Int, Int, Int, Int, Visibility)) ->  Acc (Matrix Visibility)
+processOneSeq = processOneSeq' myfft2D
 {-
 -- Imaging with a w kernel TODO: It differs from the normal implementation atm, it will only work with w-kernels, not aw-kernels
 w_cache_imaging :: KernelOptions -> OtherImagingArgs -> ImagingFunction
@@ -437,15 +450,16 @@ w_cache_imaging kernops@KernelOptions{wstep = wstep'}
 -}
 
 -- Imaging with aw-caches
-aw_imaging :: KernelOptions -> OtherImagingArgs -> F -> Int
-                -> Acc WKernels
-                -> Acc (Vector F)
-                -> Acc AKernels
-                -> Acc (Vector BaseLines)                           -- (uvw) all the uvw baselines (coordinates) (lenght : n * (n-1))
-                -> Acc (Vector (Antenna, Antenna, Time, Frequency)) -- (src) (Antenna 1, Antenna 2, The time (in MJD UTC), Frequency (Hz)) (lenght : n * (n-1))
-                -> Acc (Vector Visibility)                          -- (vis) visibility  (length n * (n-1))
-                -> Acc (Matrix Visibility)
-aw_imaging kernops@KernelOptions{wstep = wstep', qpx = qpx'}
+aw_imaging' :: (Mode -> Acc (Matrix Visibility) -> Acc (Matrix Visibility))
+            -> KernelOptions -> OtherImagingArgs -> F -> Int
+            -> Acc WKernels
+            -> Acc (Vector F)
+            -> Acc AKernels
+            -> Acc (Vector BaseLines)                           -- (uvw) all the uvw baselines (coordinates) (lenght : n * (n-1))
+            -> Acc (Vector (Antenna, Antenna, Time, Frequency)) -- (src) (Antenna 1, Antenna 2, The time (in MJD UTC), Frequency (Hz)) (lenght : n * (n-1))
+            -> Acc (Vector Visibility)                          -- (vis) visibility  (length n * (n-1))
+            -> Acc (Matrix Visibility)
+aw_imaging' myfft kernops@KernelOptions{wstep = wstep', qpx = qpx'}
   otargs@OtherImagingArgs{akernels = akernels'
                          ,wkernels = wkernels'} theta lam
         wkernels wbins akernels uvw src vis =
@@ -463,8 +477,17 @@ aw_imaging kernops@KernelOptions{wstep = wstep', qpx = qpx'}
         (a1, a2, _, _) = unzip4 src
         index = zipWith3 (\x y z -> lift (x, A.fromIntegral y, A.fromIntegral z)) closestw a1 a2
         --Normally we conjugate the kernel here, but we do it later on in the convgrid3 (or processOne) function somewhere
-    in convgridSeq wkernels akernels guv p index vis
+    in convgridSeq' myfft wkernels akernels guv p index vis
 
+aw_imaging :: KernelOptions -> OtherImagingArgs -> F -> Int
+           -> Acc WKernels
+           -> Acc (Vector F)
+           -> Acc AKernels
+           -> Acc (Vector BaseLines)                           -- (uvw) all the uvw baselines (coordinates) (lenght : n * (n-1))
+           -> Acc (Vector (Antenna, Antenna, Time, Frequency)) -- (src) (Antenna 1, Antenna 2, The time (in MJD UTC), Frequency (Hz)) (lenght : n * (n-1))
+           -> Acc (Vector Visibility)                          -- (vis) visibility  (length n * (n-1))
+           -> Acc (Matrix Visibility)
+aw_imaging = aw_imaging' myfft2D
 ----------------------------------
 -- Processing the imaging functions
 do_imaging :: F                                -- Field of view size
@@ -705,8 +728,9 @@ convolve2dO a1 a2 =
     in map (*n2) mid
 
 -- More precise method
-convolve2d :: Acc (Matrix Visibility) -> Acc (Matrix Visibility) -> Acc (Matrix Visibility)
-convolve2d a1 a2 =
+convolve2d' :: (Mode -> Acc (Matrix Visibility) -> Acc (Matrix Visibility))
+            -> Acc (Matrix Visibility) -> Acc (Matrix Visibility) -> Acc (Matrix Visibility)
+convolve2d' myfft a1 a2 =
     let
         (Z :. n :. _) = (unlift . shape) a1 :: Z :. Exp Int :. Exp Int
         m_ = 2*n - 1
@@ -715,35 +739,17 @@ convolve2d a1 a2 =
         m = 2 ^ pw
         m2 = A.fromIntegral $ m * m
 
-        f a = myfft2D Inverse . ishift2D $ pad_mid a m
+        f a = myfft Inverse . ishift2D $ pad_mid a m
         a1fft = f a1
         a2fft = f a2
 
-        -- a1fft = myfft2D Inverse . ishift2D $ pad_mid a1 m
-        -- a2fft = myfft2D Inverse . ishift2D $ pad_mid a2 m
+        -- a1fft = myfft Inverse . ishift2D $ pad_mid a1 m
+        -- a2fft = myfft Inverse . ishift2D $ pad_mid a2 m
         
         a1a2 = zipWith (*) a1fft a2fft
-        convolved = shift2D . myfft2D Forward $ a1a2
+        convolved = shift2D . myfft Forward $ a1a2
         mid = extract_mid n convolved
     in map (*m2) mid
 
-convolve3_2d :: Acc (Matrix Visibility) -> Acc (Matrix Visibility) -> Acc (Matrix Visibility) -> Acc (Matrix Visibility)
-convolve3_2d a1 a2 a3 =
-    let
-        (Z :. n :. _) = (unlift . shape) a1 :: Z :. Exp Int :. Exp Int
-        m_ = 2*n - 1
-        -- We need m to be a power of 2
-        pw = A.ceiling (logBase 2 (A.fromIntegral m_) :: Exp F) :: Exp Int
-        m = 2 ^ pw
-        m2 = A.fromIntegral $ m * m
-
-
-        a1fft = myfft2D Inverse . ishift2D $ pad_mid a1 m
-        a2fft = myfft2D Inverse . ishift2D $ pad_mid a2 m
-        a3fft = myfft2D Inverse . ishift2D $ pad_mid a3 m
-
-        a1a2a3 = zipWith3 (\x y z -> x * y * z) a1fft a2fft a3fft
-
-        convolved = shift2D . myfft2D Forward $ a1a2a3
-        mid = extract_mid n convolved
-    in map (*(m2*m2)) mid
+convolve2d :: Acc (Matrix Visibility) -> Acc (Matrix Visibility) -> Acc (Matrix Visibility)
+convolve2d = convolve2d' myfft2D
