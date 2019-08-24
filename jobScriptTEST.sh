@@ -37,32 +37,32 @@ export PATH=/home/gkeller/llvm-4.0/bin/:$PATH
 #GPU
 for N in 10000
 do
-	for value in `seq 1 $M`
-    do
-        echo "Job number $value for GPU Sequences n=$N" |& tee -a $HOME/lvandenhaak/$date\_results$N.txt
-        /usr/bin/time --verbose stack run -- -chunks 30000 -i "$TMPDIR"/lvdh/data -n $N -g |& tee -a $HOME/lvandenhaak/$date\_results$N.txt
-    done
-
     for value in `seq 1 $M`
     do
         echo "Job number $value for GPU Foreign Sequences n=$N" |& tee -a $HOME/lvandenhaak/$date\_results$N.txt
         /usr/bin/time --verbose stack run -- -chunks 30000 -i "$TMPDIR"/lvdh/data -n $N -g -for |& tee -a $HOME/lvandenhaak/$date\_results$N.txt
+    done
+
+	for value in `seq 1 $M`
+    do
+        echo "Job number $value for GPU Sequences n=$N" |& tee -a $HOME/lvandenhaak/$date\_results$N.txt
+        /usr/bin/time --verbose stack run -- -chunks 30000 -i "$TMPDIR"/lvdh/data -n $N -g |& tee -a $HOME/lvandenhaak/$date\_results$N.txt
     done
 done
 
 #CPU
 for N in 10000
 do
-	for value in `seq 1 $M2`
-    do
-        echo "Job number $value for GPU Sequences n=$N" |& tee -a $HOME/lvandenhaak/$date\_results$N.txt
-        /usr/bin/time --verbose stack run -- -chunks 30000 -i "$TMPDIR"/lvdh/data -n $N |& tee -a $HOME/lvandenhaak/$date\_results$N.txt
-    done
-
     for value in `seq 1 $M2`
     do
         echo "Job number $value for GPU Foreign Sequences n=$N" |& tee -a $HOME/lvandenhaak/$date\_results$N.txt
         /usr/bin/time --verbose stack run -- -chunks 30000 -i "$TMPDIR"/lvdh/data -n $N -for |& tee -a $HOME/lvandenhaak/$date\_results$N.txt
+    done
+
+	for value in `seq 1 $M2`
+    do
+        echo "Job number $value for GPU Sequences n=$N" |& tee -a $HOME/lvandenhaak/$date\_results$N.txt
+        /usr/bin/time --verbose stack run -- -chunks 30000 -i "$TMPDIR"/lvdh/data -n $N |& tee -a $HOME/lvandenhaak/$date\_results$N.txt
     done
 done
 
