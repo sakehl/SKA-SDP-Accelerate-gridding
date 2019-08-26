@@ -143,8 +143,8 @@ aw_gridding run wfile afile datfile n = do
     (a1,a2,ts,f) <- readSource datfile
     let t = linearIndexArray ts 0
         f' = use $ fromList Z [f]
-    akerns <- getAKernels afile theta t f
-    wkerns <- getWKernels wfile theta
+    akerns <- getAKernels afile theta t f False
+    wkerns <- getWKernels wfile theta False
     let oargs = noOtherArgs{akernels = Just akerns, wkernels = Just wkerns}
         args = noArgs
         akernels = use akerns

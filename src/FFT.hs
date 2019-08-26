@@ -24,13 +24,14 @@
 -- package contains other more sophisticated algorithms as well.
 --
 
-module FFT (myfft2D, ifft, fft, ditSplitRadixLoop, NumericR(..), Mode(..), fft2DAdhoc, fft2DOld, FFT.fft2DFor)
+module FFT (myfft2D, ifft, fft, ditSplitRadixLoop, NumericR(..), Mode(..), fft2DAdhoc, fft2DOld, FFT.fft2DFor, fft2DLiftedAdhoc)
   where
 
 import           Data.Array.Accelerate                      as A hiding
                                                                   (transpose)
 import           Data.Array.Accelerate.Array.Sugar          (shapeToList,
                                                              showShape)
+-- import           Data.Array.Accelerate.Language
 import           Data.Array.Accelerate.Control.Lens.Shape
 import           Data.Array.Accelerate.Data.Bits            as A
 import           Data.Array.Accelerate.Data.Complex
@@ -82,6 +83,30 @@ fft2DAdhoc :: (Numeric e, P.Num e, IsFloating e)
     -> Acc (Array DIM2 (Complex e))
     -> Acc (Array DIM2 (Complex e))
 fft2DAdhoc mode arr =
+  let
+    scale = A.fromIntegral (A.size arr)
+    go    = transpose . ditSplitRadixLoop mode >-> transpose . ditSplitRadixLoop mode
+  in case mode of
+      Inverse -> A.map (/scale) (go arr)
+      _       -> go arr
+
+
+fft2DLiftedAdhoc :: (Numeric e, P.Num e, IsFloating e)
+    => Mode
+    -> Acc (Array DIM2 (Complex e))
+    -> Acc (Array DIM2 (Complex e))
+fft2DLiftedAdhoc mode = liftedAcc (fft2DAdhoc mode) f
+  where
+    f :: (Numeric e, P.Num e, IsFloating e) => LiftedType (Array DIM2 (Complex e)) a' -> LiftedType (Array DIM2 (Complex e)) b' -> P.Maybe (Acc a' -> Acc b')
+    f = \ty ty2 -> case (ty,ty2) of
+                                  (RegularT,RegularT) -> P.Just (fft2DLiftedAdhoc' mode)
+                                  _ -> P.Nothing
+
+fft2DLiftedAdhoc' :: (Numeric e, P.Num e, IsFloating e)
+    => Mode
+    -> Acc (Array DIM3 (Complex e))
+    -> Acc (Array DIM3 (Complex e))
+fft2DLiftedAdhoc' mode arr =
   let
     scale = A.fromIntegral (A.size arr)
     go    = transpose . ditSplitRadixLoop mode >-> transpose . ditSplitRadixLoop mode

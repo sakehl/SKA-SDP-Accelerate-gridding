@@ -5,11 +5,12 @@ import ImageDataset
 import FFT
 import System.Directory
 import Control.Exception
+import Control.Monad
 import System.IO.Error hiding (catch)
 import System.Environment
 import qualified Data.Array.Accelerate.LLVM.Native      as CPU
 import qualified Data.Array.Accelerate.Interpreter      as I
-import Data.Array.Accelerate.Debug
+import Data.Array.Accelerate.Debug hiding (when)
 
 #ifdef ACCELERATE_LLVM_PTX_BACKEND
 import qualified Data.Array.Accelerate.LLVM.PTX         as GPU
@@ -20,10 +21,11 @@ data Args = Args { n   :: Maybe Int
                  , input :: String
                  , out :: Maybe String
                  , flags :: [String]
+                 , chatty :: Bool
                  , chunks :: Maybe Int
                  , fftf   :: FFT     }
 
-defArgs = Args (Just 1) CPU "data" Nothing [] Nothing Adhoc
+defArgs = Args (Just 1) CPU "data" Nothing [] False Nothing Adhoc
 
 main :: IO ()
 main = do
@@ -40,6 +42,7 @@ main = do
         fs         = flags parsedArgs
         chunks_    = chunks parsedArgs
         fft_       = fftf parsedArgs
+        chatty_    = chatty parsedArgs
         runner1 :: Runners
         runner1    = case backend of
             CPU   -> CPU.run1
@@ -54,21 +57,23 @@ main = do
         Just n  -> do putStrLn ("Chunks of " ++ show n); setEnv "ACCELERATE_FLAGS" ("-chunk-size=" ++ show n)
     
     myfft<- case fft_ of
-              Adhoc   -> do putStrLn "Adhoc fft"; return fft2DAdhoc
-              Old     -> do putStrLn "Old fft"; return fft2DOld
-              Foreign -> do putStrLn "Foreign fft";return fft2DFor
+              Adhoc   -> do when chatty_ $ putStrLn "Adhoc fft"; return fft2DAdhoc
+              Old     -> do when chatty_ $ putStrLn "Old fft"; return fft2DOld
+              Foreign -> do when chatty_ $ putStrLn "Foreign fft";return fft2DFor
+              AdhocLifted -> do when chatty_ $ putStrLn "AdhocLifted fft"; return fft2DLiftedAdhoc
         
     case backend of
-        CPU   -> putStrLn "CPU backend"
-        Inter -> putStrLn "Interpreter backend"
-        GPU   -> putStrLn "GPU backend"
+        CPU   -> when chatty_ $ putStrLn "CPU backend"
+        Inter -> when chatty_ $ putStrLn "Interpreter backend"
+        GPU   -> when chatty_ $ putStrLn "GPU backend"
     mapM_ processFlags fs
     
     case outFile of
         Nothing -> return ()
         Just fn  -> remover fn
-    fourier <- aw_gridding runner1 myfft backend fft_ wkern akern visdata n_ outFile
-    putStrLn (show fourier)
+    fourier <- aw_gridding runner1 myfft backend fft_ wkern akern visdata n_ outFile chatty_
+    return ()
+    -- putStrLn (show fourier)
 
 
 remover :: FilePath -> IO ()
@@ -90,6 +95,8 @@ parser args ("-for":xs)   = parser args{fftf = Foreign} xs
 parser args ("-foreign":xs)
                           = parser args{fftf = Foreign} xs
 parser args ("-adhoc":xs) = parser args{fftf = Adhoc} xs
+parser args ("-adhoclift":xs) = parser args{fftf = AdhocLifted} xs
+parser args ("-v":xs) = parser args{chatty = True} xs
 parser args ("-n":n:xs)   = parser args{n = Just $ read n} xs
 parser args ("-all":xs)   = parser args{n = Nothing} xs
 parser args ("-i":inp:xs) = parser args{input = inp} xs

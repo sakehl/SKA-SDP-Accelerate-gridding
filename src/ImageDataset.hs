@@ -25,12 +25,12 @@ import           Data.Array.Accelerate.Math.DFT.Centre as A
 import           Data.Array.Accelerate.Math.FFT        as FFT
 
 import           Data.Array.Accelerate.Array.Sugar     as S
-import           Data.Array.Accelerate.Debug           as A
 import qualified Data.Array.Accelerate.Interpreter     as I
 import qualified Data.Array.Accelerate.LLVM.Native     as CPU
 import           Data.Array.Accelerate.Trafo
 
 import           Control.Exception
+import           Control.Monad
 import qualified Data.List                             as L (sort, sortBy, (!!))
 import           Data.Maybe
 import           Data.Time.Clock
@@ -54,36 +54,35 @@ type Args    = ( Scalar Int {- Dummy Int to prevent caching of results -}
                )
 
 data Run = GPU | CPU | Inter deriving P.Show
-data FFT = Adhoc | Old | Foreign deriving P.Show
+data FFT = Adhoc | AdhocLifted | Old | Foreign deriving P.Show
 
 --aw_gridding :: String -> String -> String -> IO Image
-aw_gridding :: Runners -> FFTFunc -> Run -> FFT -> String -> String -> String -> Maybe Int -> Maybe String -> IO Float
-aw_gridding runN myfft backend fftT wfile afile datfile n outfile = do
+aw_gridding :: Runners -> FFTFunc -> Run -> FFT -> String -> String -> String -> Maybe Int -> Maybe String -> Bool -> IO ()
+aw_gridding runN myfft backend fftT wfile afile datfile n outfile chatty = do
     let theta    = 0.008
         lam      = 300000 :: Int
         lamf     = fromIntegral lam :: F
     t0 <- getCurrentTime
 
     -------------------------------------
-    P.putStrLn $ "Start loading data"
+    when chatty $ P.putStrLn $ "Start loading data"
     vis <- readVis datfile
     uvw <- readBaselines datfile
     (a1,a2,ts,f) <- readSource datfile
     let t = P.head . toList $ ts
         f' = P.head . toList $ ts
-    akerns <- getAKernels afile theta t f'
-    (wkerns, wbins) <- getWKernels wfile theta
+    akerns <- getAKernels afile theta t f' chatty 
+    (wkerns, wbins) <- getWKernels wfile theta chatty
     let n'  = maybe (arraySize . arrayShape  $ vis) P.id $ n
         len = fromList Z [n']
         arg :: Int -> Args
         arg i = (fromList Z [i], len, wkerns, wbins, akerns, uvw, a1, a2, ts, f, vis)
-    evaluate ()
     t1 <- getCurrentTime
     P.putStrLn $ "Data loaded, time taken: " P.++ P.show (diffUTCTime t1 t0)
-    if (isNothing n) then P.putStrLn ("Processing all the data: " P.++ P.show n') else return ()
+    when chatty $ if (isNothing n) then P.putStrLn ("Processing all the data: " P.++ P.show n') else return ()
 
     ----------------------------------------
-    P.putStrLn "Start compiling"
+    when chatty $ P.putStrLn "Start compiling"
     let gridderf = runN (toTupF $ gridder theta lam)
         it = iterator gridderf arg
     evaluate gridderf
@@ -96,17 +95,17 @@ aw_gridding runN myfft backend fftT wfile afile datfile n outfile = do
     -- P.putStrLn $ "Evaluated once to start up, time taken: " P.++ P.show (diffUTCTime t3 t2)
 
     ------------------------------------------
-    P.putStrLn "Start imaging"
+    when chatty $ P.putStrLn "Start imaging"
     -- timings <- P.mapM it [1..10]
     timings <- P.mapM it [0]
     t4 <- getCurrentTime
-    P.putStrLn $ "Benchmarks completed, time taken: " P.++ P.show (diffUTCTime t4 t3)
+    when chatty $ P.putStrLn $ "Benchmarks completed, time taken: " P.++ P.show (diffUTCTime t4 t3)
     case outfile of
         Nothing -> return ()
         Just fn -> do createh5File fn; createDatasetDouble fn "/img" (P.snd . gridderf $ arg 0)
     let res t = printf "%s,%s,%s,%d,%f,%f,%f\n" (P.show t0) (P.show backend) (P.show fftT) n' (differ t1 t0) (differ t2 t1) t
     P.mapM (\t -> P.appendFile "data/timings.csv" (res t)) timings
-    return (average timings)
+    return ()
 
     where
         average :: [Float] -> Float
@@ -199,9 +198,9 @@ aw_gridding runN myfft backend fftT wfile afile datfile n outfile = do
             = fun n wkernels wbins akernels uvwmat a1 a2 ts f vis
 
 
-getAKernels :: String -> F -> Time -> Frequency -> IO (Array DIM3 Visibility)
-getAKernels file theta t f = do
-    P.putStrLn "Loading A kernels"
+getAKernels :: String -> F -> Time -> Frequency -> Bool -> IO (Array DIM3 Visibility)
+getAKernels file theta t f chatty = do
+    when chatty $ P.putStrLn "Loading A kernels"
     --Get all the antennas
     ants <- listGroupMembers file (printf "/akern/%f" theta)
     let antsSorted = convertAndSort ants :: [(Int, String)]
@@ -212,24 +211,24 @@ getAKernels file theta t f = do
         ts0      = P.map P.fst tsSorted
         idt      = P.snd $ findClosestList ts0 t
         closestt =  P.snd $ tsSorted L.!! idt
-    P.putStrLn $ printf "Closest time found in a-kernels is %s (input time: %f)" closestt t
+    when chatty $ P.putStrLn $ printf "Closest time found in a-kernels is %s (input time: %f)" closestt t
     --Get all the frequencies
     fs <- listGroupMembers file (printf "/akern/%f/%s/%s" theta a0 closestt)
     let fsSorted = convertAndSort fs :: [(Frequency, String)]
         fs0      = P.map P.fst tsSorted
         idf      = P.snd $ findClosestList fs0 f
         closestf =  P.snd $ fsSorted L.!! idf
-    P.putStrLn $ printf "Closest frequency found in a-kernels is %s (input frequency: %f)" closestf f
+    when chatty $ P.putStrLn $ printf "Closest frequency found in a-kernels is %s (input frequency: %f)" closestf f
     -- Get all the kernels from the antenna's
     let alldatasets = P.map  (\a -> printf "/akern/%f/%s/%s/%s/kern" theta (P.snd a) closestt closestf) antsSorted
     akerns <- readDatasetsComplex file alldatasets :: IO (Array DIM3 Visibility)
-    P.putStrLn "A kernels loaded"
+    when chatty $ P.putStrLn "A kernels loaded"
     return akerns
 
 
-getWKernels :: String -> F -> IO (Array DIM5 Visibility, Vector BaseLine)
-getWKernels file theta = do
-    P.putStrLn "Loading W kernels"
+getWKernels :: String -> F -> Bool -> IO (Array DIM5 Visibility, Vector BaseLine)
+getWKernels file theta chatty = do
+    when chatty $ P.putStrLn "Loading W kernels"
     --Get all the wbins
     wbins <- listGroupMembers file (printf "/wkern/%f" theta)
     let wbinsSorted = convertAndSort wbins :: [(BaseLine, String)]
@@ -238,7 +237,7 @@ getWKernels file theta = do
         wbinsv = fromList (Z :. P.length wbinsSorted :: DIM1) (P.map (P.fst) wbinsSorted)
     -- Get all the kernels from the wbins
     wkerns <- readDatasetsComplex file alldatasets :: IO (Array DIM5 Visibility)
-    P.putStrLn "W kernels loaded"
+    when chatty $ P.putStrLn "W kernels loaded"
     return (wkerns, wbinsv)
 
 -- Some helpers

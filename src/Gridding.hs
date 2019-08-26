@@ -199,11 +199,11 @@ convgrid gcf a p v =
 
         getComplexAndAddOffset :: Exp DIM3 -> Exp (Int, Int, Int, Int, Visibility) -> Exp (Int, Int, Visibility)
         getComplexAndAddOffset
-            (unlift . unindex3 -> (_, i, j) ::(Exp Int,Exp Int,Exp Int))
+            (unlift . unindex3 -> (_, j, i) ::(Exp Int,Exp Int,Exp Int))
             (unlift -> (x, xf, y, yf, vis)::(Exp Int,Exp Int,Exp Int,Exp Int,Exp Visibility)) =
-            lift ( x + j
-                 , y + i
-                 , vis * gcf ! lift (Z :. yf :. xf :. i :. j) )
+            lift ( x + i
+                 , y + j
+                 , vis * gcf ! lift (Z :. yf :. xf :. j :. i) )
     in permute (+) a indexer val
 
 convgrid2 :: Acc (Array DIM5 Visibility)        -- The oversampled convolution kernel
@@ -246,11 +246,11 @@ convgrid2 gcf a p wbin v =
 
         getComplexAndAddOffset :: Exp DIM3 -> Exp (Int, Int, Int, Int, Int, Visibility) -> Exp (Int, Int, Visibility)
         getComplexAndAddOffset
-            (unlift . unindex3 -> (_, i, j) ::(Exp Int,Exp Int,Exp Int))
+            (unlift . unindex3 -> (_, j, i) ::(Exp Int,Exp Int,Exp Int))
             (unlift -> (wbin, x, xf, y, yf, vis)::(Exp Int,Exp Int,Exp Int,Exp Int,Exp Int,Exp Visibility)) =
-            lift ( x + j
-                 , y + i
-                 , vis * gcf ! lift (Z :. wbin :. yf :. xf :. i :. j) )
+            lift ( x + i
+                 , y + j
+                 , vis * gcf ! lift (Z :. wbin :. yf :. xf :. j :. i) )
     in permute (+) a indexer val
 
 convgrid3 ::
@@ -314,11 +314,11 @@ processOne
                 in index2 y' x'
 
             getComplexAndAddOffset :: Exp DIM2 -> Exp (Int, Int, Visibility) -> Exp (Int, Int, Visibility)
-            getComplexAndAddOffset (unlift . unindex2 -> (i, j)::(Exp Int,Exp Int))
+            getComplexAndAddOffset (unlift -> Z :. j :. i ::(Z:.Exp Int:.Exp Int))
                 (unlift -> (x, y, vis)::(Exp Int,Exp Int,Exp Visibility)) =
-                    lift ( x + j
-                         , y + i
-                         , vis * awkern ! lift (Z :. i :. j) )
+                    lift ( x + i
+                         , y + j
+                         , vis * awkern ! lift (Z :. j :. i) )
         in permute (+) a indexer val
 
 convgridSeq' :: (Mode -> Acc (Matrix Visibility) -> Acc (Matrix  Visibility))
@@ -348,8 +348,8 @@ convgridSeq' myfft wkerns akerns a p index v =
         addCoords :: Acc (Matrix Visibility) -> Acc (Scalar (Int, Int)) -> Acc (Matrix (Int, Int, Visibility))
         addCoords vis xy = let
             (x,y) = unlift . the $ xy :: (Exp Int, Exp Int)
-            indexmapper (unlift . unindex2 -> (i, j)::(Exp Int,Exp Int)) vis =
-                    lift ( x + i - halfgw, y + j - halfgh, vis)
+            indexmapper (unlift -> Z :. j :. i ::(Z:.Exp Int:.Exp Int)) vis =
+                lift ( x + i - halfgw, y + j - halfgh, vis)
             in imap indexmapper vis
 
         visAndCoordSeq = zipWithSeq addCoords visKernSeq coordsSeq
